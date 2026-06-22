@@ -40,6 +40,9 @@ env/
 # Logs
 *.log
 
+# Debug output / runtime artifacts
+debug/
+
 # OS
 .DS_Store
 Thumbs.db
