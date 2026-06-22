@@ -1,0 +1,74 @@
+{
+  "version": "1.0",
+  "stage_code": "GO-EX-8",
+  "stage_name": "GO-EX-8",
+  "grid_rows": 9,
+  "grid_cols": 11,
+  "operators": ["德狗", "logos", "爱姐", "初雪", "林"],
+  "actions": [
+    {
+      "time_ms": 34000,
+      "action": "deploy",
+      "operator_name": "logos",
+      "grid": [6, 5],
+      "direction": "right"
+    },
+    {
+      "time_ms": 34000,
+      "action": "deploy",
+      "operator_name": "初雪",
+
+      "grid": [2, 7],
+      "direction": "right"
+    },
+    {
+      "time_ms": 42000,
+      "action": "skill",
+      "operator_name": "初雪",
+      "grid": null,
+      "direction": null
+    },
+     {
+      "time_ms": 49035,
+      "action": "skill",
+      "operator_name": "logos",
+      "grid": null,
+      "direction": null
+    },
+    {
+      "time_ms": 54000,
+      "action": "deploy",
+      "operator_name": "爱姐",
+      "grid": [3, 2],
+      "direction": "down"
+    },
+    {
+      "time_ms": 56500,
+      "action": "retreat",
+      "operator_name": "初雪",
+      "grid": null,
+      "direction": null
+    },
+    {
+      "time_ms": 79000,
+      "action": "retreat",
+      "operator_name": "logos",
+      "grid": null,
+      "direction": null
+    },
+    {
+    "time_ms": 90000,
+    "action": "skill",
+    "operator_name": "某个装置",
+    "grid": [4, 2],
+    "is_object": true
+    },
+    {
+    "time_ms": 115000,
+    "action": "retreat",
+    "operator_name": "大兵",
+    "grid": [5, 1],
+    "is_object": true
+    }
+  ]
+}

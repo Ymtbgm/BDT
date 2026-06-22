@@ -1,0 +1,180 @@
+{
+  "version": "1.0",
+  "stage_code": "0-1",
+  "stage_name": "0-1",
+  "grid_rows": 6,
+  "grid_cols": 9,
+  "operators": [
+    "小车",
+    "德狗",
+    "桃子",
+    "杜林",
+    "极境",
+    "夜烟",
+    "阿米娅",
+    "特克诺",
+    "逻神",
+    "真言"
+  ],
+  "items": [],
+  "actions": [
+    {
+      "time_ms": 8000,
+      "action": "deploy",
+      "operator_name": "桃子",
+      "grid": [
+        2,
+        1
+      ],
+      "direction": "up",
+      "is_object": false
+    },
+    {
+      "time_ms": 8000,
+      "action": "deploy",
+      "operator_name": "极境",
+      "grid": [
+        3,
+        1
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 16000,
+      "action": "deploy",
+      "operator_name": "德狗",
+      "grid": [
+        3,
+        2
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 36000,
+      "action": "skill",
+      "operator_name": "桃子",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 36000,
+      "action": "skill",
+      "operator_name": "极境",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 36000,
+      "action": "skill",
+      "operator_name": "德狗",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "小车",
+      "grid": [
+        1,
+        1
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "杜林",
+      "grid": [
+        1,
+        2
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "夜烟",
+      "grid": [
+        1,
+        3
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "阿米娅",
+      "grid": [
+        1,
+        4
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "retreat",
+      "operator_name": "桃子",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "retreat",
+      "operator_name": "极境",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "retreat",
+      "operator_name": "德狗",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "特克诺",
+      "grid": [
+        1,
+        5
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "逻神",
+      "grid": [
+        1,
+        6
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 56000,
+      "action": "deploy",
+      "operator_name": "真言",
+      "grid": [
+        1,
+        7
+      ],
+      "direction": "down",
+      "is_object": false
+    }
+  ]
+}

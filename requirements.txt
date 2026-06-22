@@ -1,0 +1,11 @@
+pydantic>=2.0
+mss>=9.0
+opencv-python>=4.8
+numpy>=1.24
+paddleocr>=2.7
+paddlepaddle
+pywin32>=306
+pydirectinput>=1.0
+keyboard>=0.13
+pynput>=1.7
+PyQt6>=6.5

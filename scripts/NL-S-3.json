@@ -1,0 +1,344 @@
+{
+  "version": "1.0",
+  "stage_code": "NL-S-3 ",
+  "stage_name": "NL-S-3 ",
+  "grid_rows": 7,
+  "grid_cols": 12,
+  "operators": [
+    "术士车车",
+    "德狗",
+    "隐隐",
+    "初雪大人",
+    "死芒"
+  ],
+  "items": [],
+  "actions": [
+    {
+      "time_ms": 68,
+      "action": "deploy",
+      "operator_name": "术士车车",
+      "grid": [
+        0,
+        6
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 15001,
+      "action": "deploy",
+      "operator_name": "初雪大人",
+      "grid": [
+        2,
+        6
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 23001,
+      "action": "retreat",
+      "operator_name": "术士车车",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 24201,
+      "action": "skill",
+      "operator_name": "初雪大人",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 33001,
+      "action": "deploy",
+      "operator_name": "死芒",
+      "grid": [
+        4,
+        6
+      ],
+      "direction": "up",
+      "is_object": false
+    },
+    {
+      "time_ms": 53001,
+      "action": "skill",
+      "operator_name": "灯",
+      "grid": [
+        6,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 57467,
+      "action": "retreat",
+      "operator_name": "初雪大人",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 59334,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        6
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 59367,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        7
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 59401,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 59434,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        2,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 65534,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 69034,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        6
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 69068,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        7
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 69101,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 74234,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        2,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 120833,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 169600,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 201700,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        2,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 203101,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 203500,
+      "action": "deploy",
+      "operator_name": "初雪大人",
+      "grid": [
+        4,
+        7
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 211500,
+      "action": "skill",
+      "operator_name": "初雪大人",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 228301,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 246001,
+      "action": "deploy",
+      "operator_name": "术士车车",
+      "grid": [
+        0,
+        4
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 278001,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        6
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 280301,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 282001,
+      "action": "retreat",
+      "operator_name": "术士车车",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 295001,
+      "action": "skill",
+      "operator_name": "灯",
+      "grid": [
+        0,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 297001,
+      "action": "skill",
+      "operator_name": "初雪大人",
+      "grid": [
+        4,
+        7
+      ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 304401,
+      "action": "skill",
+      "operator_name": "死芒",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 308401,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        7
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 308434,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        6
+      ],
+      "direction": null,
+      "is_object": true
+    },
+    {
+      "time_ms": 308467,
+      "action": "retreat",
+      "operator_name": "小兵",
+      "grid": [
+        3,
+        5
+      ],
+      "direction": null,
+      "is_object": true
+    }
+  ]
+}

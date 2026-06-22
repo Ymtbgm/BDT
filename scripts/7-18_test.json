@@ -1,0 +1,206 @@
+{
+  "version": "1.0",
+  "stage_code": "7-18",
+  "stage_name": "7-18",
+  "grid_rows": 8,
+  "grid_cols": 12,
+  "operators": [
+    "德狗",
+    "桃子",
+    "极境",
+    "芙蓉",
+    "爱姐",
+    "拉狗",
+    "澄闪",
+    "初雪",
+    "小莫",
+    "小火龙"
+  ],
+  "items": [
+    {
+      "name": "地雷",
+      "charges": 15
+    }
+  ],
+  "actions": [
+    {
+      "time_ms": 1001,
+      "action": "deploy",
+      "operator_name": "德狗",
+      "grid": [
+        6,
+        1
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 16001,
+      "action": "deploy",
+      "operator_name": "桃子",
+      "grid": [
+        6,
+        2
+      ],
+      "direction": "up",
+      "is_object": false
+    },
+    {
+      "time_ms": 16001,
+      "action": "deploy",
+      "operator_name": "极境",
+      "grid": [
+        5,
+        1
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 22001,
+      "action": "skill",
+      "operator_name": "德狗",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 27034,
+      "action": "skill",
+      "operator_name": "极境",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 27068,
+      "action": "skill",
+      "operator_name": "桃子",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 36001,
+      "action": "deploy",
+      "operator_name": "澄闪",
+      "grid": [
+        5,
+        2
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 36001,
+      "action": "deploy",
+      "operator_name": "拉狗",
+      "grid": [
+        4,
+        2
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 60001,
+      "action": "deploy",
+      "operator_name": "小莫",
+      "grid": [
+        4,
+        4
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 60001,
+      "action": "retreat",
+      "operator_name": "桃子",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 67001,
+      "action": "retreat",
+      "operator_name": "极境",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 67034,
+      "action": "deploy",
+      "operator_name": "小火龙",
+      "grid": [
+        5,
+        4
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 67068,
+      "action": "skill",
+      "operator_name": "德狗",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 70034,
+      "action": "deploy",
+      "operator_name": "芙蓉",
+      "grid": [
+        2,
+        5
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 72001,
+      "action": "deploy",
+      "operator_name": "地雷",
+      "grid": [
+        5,
+        7
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 95500,
+      "action": "skill",
+      "operator_name": "拉狗",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 98500,
+      "action": "skill",
+      "operator_name": "澄闪",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 98500,
+      "action": "skill",
+      "operator_name": "小莫",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 98500,
+      "action": "skill",
+      "operator_name": "小火龙",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    }
+  ]
+}
