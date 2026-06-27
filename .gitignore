@@ -28,7 +28,17 @@ env/
 
 # PyInstaller
 *.manifest
+*.spec
 *.spec.bak
+*.7z
+*.zip
+*.tar.gz
+*.exe
+build.bat
+
+# PyInstaller onedir output (if placed outside dist/)
+ArknightsAuto/
+_internal/
 
 # IDE
 .idea/

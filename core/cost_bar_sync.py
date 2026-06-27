@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from core.capture import WindowCapture
+import core.constants as constants
 
 
 class CostBarSync:
@@ -17,23 +18,19 @@ class CostBarSync:
     """
 
     # 默认 ROI 比例基于 2560x1600 分辨率下费用条位置（与 main.py 中一致）
-    DEFAULT_ROI_RATIOS = (
-        2343 / 2560,  # x
-        1278 / 1600,  # y
-        (2560 - 2343) / 2560,  # w
-        (1284 - 1278) / 1600,  # h
-    )
+    DEFAULT_ROI_RATIOS = constants.COST_BAR_ROI_RATIOS
 
     def __init__(
         self,
         capture: WindowCapture,
         roi_ratios: Optional[Tuple[float, float, float, float]] = None,
-        threshold: int = 200,
-        step_pixels: float = 45.0,
-        full_pixels: int = 1302,
-        frame_offset_ms: float = 0.0,
+        threshold: int = constants.COST_BAR_THRESHOLD,
+        step_pixels: float = constants.COST_BAR_STEP_PIXELS,
+        full_pixels: int = constants.COST_BAR_FULL_PIXELS,
+        frame_offset_ms: float = constants.COST_BAR_FRAME_OFFSET_MS,
         debug: bool = False,
     ):
+
         self.capture = capture
         self.roi_ratios = roi_ratios or self.DEFAULT_ROI_RATIOS
         self.threshold = threshold
@@ -41,6 +38,10 @@ class CostBarSync:
         self.full_pixels = full_pixels
         self.frame_offset_ms = frame_offset_ms
         self.debug = debug
+
+    @property
+    def cycle_length(self) -> int:
+        return 30
 
     def _roi_abs(self) -> Tuple[int, int, int, int]:
         """根据窗口大小计算费用条 ROI 的绝对屏幕坐标。"""

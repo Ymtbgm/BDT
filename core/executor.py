@@ -1,6 +1,10 @@
 import asyncio
+import os
 import time
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Union
+
+import cv2
+import numpy as np
 from pydantic import BaseModel
 
 from core.capture import WindowCapture
@@ -9,7 +13,12 @@ from core.timer import StageTimer
 from core.ocr_engine import OCREngine
 from core.operator_pool import OperatorPool
 from core.cost_bar_sync import CostBarSync
+from core.cost_bar_sync_cc import CostBarSyncCC
+import core.constants as constants
 from models.script_schema import ScriptModel, ActionType, OperatorAction
+
+
+CostBarSyncType = Union[CostBarSync, CostBarSyncCC]
 
 
 class ExecutorState(BaseModel):
@@ -20,30 +29,38 @@ class ExecutorState(BaseModel):
 
 
 class ScriptExecutor:
-    def __init__(self, capture: WindowCapture, ocr: OCREngine, action_module):
+    def __init__(self, capture: WindowCapture, ocr: OCREngine, action_module, debug: bool = False):
         self.capture = capture
         self.ocr = ocr
         self.action = action_module
+        self.debug = debug
         self.timer = StageTimer()
         self.script: Optional[ScriptModel] = None
         self.grid: Optional[GridMapper] = None
         self.pool: Optional[OperatorPool] = None
-        self.cost_sync: Optional[CostBarSync] = None
+        self.cost_sync: Optional[CostBarSyncType] = None
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
+        self._costs_recognized = False
 
-    def set_cost_sync(self, cost_sync: Optional[CostBarSync]):
+    def set_cost_sync(self, cost_sync: Optional[CostBarSyncType]):
         self.cost_sync = cost_sync
 
-    def load_script(self, script: ScriptModel):
+    def load_script(self, script: ScriptModel, borrow_support: bool = False, direct_start: bool = False):
         self.script = script
+        self.borrow_support = borrow_support
+        self.direct_start = direct_start
         script.sort_actions()
         w, h = self.capture.get_window_size()
         self.grid = GridMapper(
             w, h, script.grid_rows, script.grid_cols,
             stage_code=script.stage_code, stage_name=script.stage_name,
         )
-        self.pool = OperatorPool(w, h, script.operators, script.items)
+        support_count = 1 if borrow_support else 0
+        self.pool = OperatorPool(
+            w, h, script.operators, script.items, script.summons,
+            support_count=support_count,
+        )
         left = self.capture.monitor.get("left", 0)
         top = self.capture.monitor.get("top", 0)
         self.pool.set_window_offset(left, top)
@@ -63,19 +80,19 @@ class ScriptExecutor:
                 return False
             # 剩余时间 > 5ms 时用 asyncio.sleep 避免空转；
             # 最后 5ms 自旋等待，消除 sleep 精度抖动（Windows 默认 ~15ms）
-            if target_ms - self.timer.get_elapsed_ms() > 5:
+            if target_ms - self.timer.get_elapsed_ms() > constants.WAIT_SPIN_THRESHOLD_MS:
                 await asyncio.sleep(check_interval)
         return True
 
     def _get_actual_target(self, action: OperatorAction) -> int:
-        """对最左三列的 RETREAT/SKILL 提前 18ms 触发。"""
+        """对最左三列的 RETREAT/SKILL 提前触发。"""
         if action.action not in (ActionType.RETREAT, ActionType.SKILL):
             return action.time_ms
         grid = action.grid
         if not grid and action.operator_name and not action.is_object:
             grid = self.pool.get_deployed_grid(action.operator_name)
         if grid and grid[1] in (0, 1, 2):
-            return max(0, action.time_ms - 18)
+            return max(0, action.time_ms - constants.LEFT_COLS_ADVANCE_MS)
         return action.time_ms
 
     def _abs_pixel(self, row: int, col: int, side: bool = False):
@@ -83,6 +100,181 @@ class ScriptExecutor:
         left = self.capture.monitor.get("left", 0)
         top = self.capture.monitor.get("top", 0)
         return x + left, y + top
+
+    def _ensure_operator_costs(self):
+        """确保已执行过一次部署栏费用识别，在首个动作暂停后调用。"""
+        if self._costs_recognized:
+            return
+        self._costs_recognized = True
+        costs = self._recognize_operator_costs()
+        if costs:
+            self.pool.set_operator_costs(costs)
+            if self.debug:
+                print(f"[部署栏OCR] 首个动作暂停时已设置费用: {costs}")
+        elif self.debug:
+            print("[部署栏OCR] 首个动作暂停时未识别到费用，使用初始序号排序")
+
+    def _recognize_operator_costs(self) -> Dict[str, int]:
+        """按干员格子精确裁剪并 OCR 识别费用，返回 {operator_name: cost}。
+
+        识别失败或数量不匹配时返回空字典，调用方应回退到按初始序号排序。
+        """
+        if not self.script or not self.script.operators:
+            return {}
+        w, h = self.capture.get_window_size()
+        left = self.capture.monitor.get("left", 0)
+        top = self.capture.monitor.get("top", 0)
+        ratios = constants.DEPLOY_BAR_COST_ROI_RATIOS
+        y = int(h * ratios[1]) + top
+        rh = int(h * ratios[3])
+
+        support_count = 1 if getattr(self, "borrow_support", False) else 0
+        operators_to_recognize = self.script.operators[:-support_count] if support_count > 0 else self.script.operators
+        num_operators = len(self.script.operators)
+        num_items = len(self.script.items) if self.script.items else 0
+        total = num_operators + num_items
+        cell_w = w / 12 if total <= 12 else w / total
+
+        session_id = int(time.time() * 1000)
+        session_dir = os.path.join("debug", "operator_cost_ocr", str(session_id))
+        if self.debug:
+            os.makedirs(session_dir, exist_ok=True)
+            print(
+                f"[部署栏OCR] 会话={session_id} 窗口=({w}x{h}) 格子宽={cell_w:.1f} "
+                f"干员数={num_operators} 道具数={num_items} 助战={support_count}"
+            )
+
+        mapping = {}
+        for i, name in enumerate(operators_to_recognize):
+            bar_index = total - 1 - i
+            cx = w - cell_w * (bar_index + 0.5)
+            x = int(cx) + left
+            rw = 53
+            try:
+                img = self.capture.capture_roi(x, y, rw, rh)
+            except Exception as e:
+                if self.debug:
+                    print(f"[部署栏OCR] {name}: 截取 ROI 失败: {e}")
+                continue
+
+            raw_path = os.path.join(session_dir, f"{name}_raw.png") if self.debug else None
+            fixed_path = os.path.join(session_dir, f"{name}_fixed.png") if self.debug else None
+            inv_path = os.path.join(session_dir, f"{name}_inv.png") if self.debug else None
+
+            fixed_img = self._preprocess_cost_image(img)
+            inv_img = self._preprocess_cost_image_inv(img)
+
+            # 固定阈值二值化 → 反色二值化
+            fixed_result = self._extract_cost_with_conf(
+                self.ocr.recognize(fixed_img, min_confidence=0.5), min_conf=0.5
+            )
+            inv_result = self._extract_cost_with_conf(
+                self.ocr.recognize(inv_img, min_confidence=0.5), min_conf=0.5
+            )
+
+            if self.debug:
+                os.makedirs(session_dir, exist_ok=True)
+                cv2.imwrite(raw_path, img)
+                cv2.imwrite(fixed_path, fixed_img)
+                cv2.imwrite(inv_path, inv_img)
+                fixed_str = f"{fixed_result[0]}({fixed_result[1]:.2f})" if fixed_result else "失败"
+                inv_str = f"{inv_result[0]}({inv_result[1]:.2f})" if inv_result else "失败"
+
+            chosen = None
+            chosen_source = None
+            if fixed_result:
+                chosen = fixed_result[0]
+                chosen_source = "固定阈值"
+            elif inv_result:
+                chosen = inv_result[0]
+                chosen_source = "反色"
+
+            if chosen is not None:
+                mapping[name] = chosen
+                if self.debug:
+                    print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → {chosen} ({chosen_source})")
+            elif self.debug:
+                print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → 失败")
+
+        expected = len(operators_to_recognize)
+        if len(mapping) < expected:
+            if self.debug:
+                print(
+                    f"[部署栏OCR] 仅识别到 {len(mapping)}/{expected} 个费用，"
+                    f"回退到初始序号排序"
+                )
+            return {}
+
+        # 自动检测手动借用的助战干员：仅直接开始作战时启用。
+        # 直接开始作战未勾选 borrow_support，但用户可能手动借用。
+        # 若最右侧干员费用低于其左侧第一名干员，则判定最右侧为助战，固定在最右不参与排序。
+        if (
+            self.direct_start
+            and support_count == 0
+            and len(self.script.operators) >= 2
+        ):
+            rightmost_name = self.script.operators[-1]
+            left_neighbor_name = self.script.operators[-2]
+            if rightmost_name in mapping and left_neighbor_name in mapping:
+                if mapping[rightmost_name] < mapping[left_neighbor_name]:
+                    self.borrow_support = True
+                    if self.pool is not None:
+                        self.pool.set_support_count(1)
+                    if self.debug:
+                        print(
+                            f"[部署栏OCR] 检测到手动助战: {rightmost_name}"
+                            f"({mapping[rightmost_name]}) < {left_neighbor_name}"
+                            f"({mapping[left_neighbor_name]}), 已固定为最右"
+                        )
+
+        if self.debug:
+            print(f"[部署栏OCR] 识别费用: {mapping}")
+        return mapping
+
+    def _extract_cost_with_conf(self, results: list, min_conf: float = 0.5) -> Optional[Tuple[int, float]]:
+        """从 OCR 结果中提取置信度最高的纯数字费用，无有效结果返回 None。"""
+        best_cost = None
+        best_conf = 0.0
+        for bbox, (text, conf) in results:
+            if conf < min_conf:
+                continue
+            digits = "".join(c for c in text if c.isdigit())
+            if not digits:
+                continue
+            try:
+                cost = int(digits)
+            except ValueError:
+                continue
+            if conf > best_conf:
+                best_conf = conf
+                best_cost = cost
+        return (best_cost, best_conf) if best_cost is not None else None
+
+    def _extract_cost_from_results(self, results: list) -> Optional[int]:
+        """从单格 OCR 结果中提取最可信的纯数字费用，无有效结果返回 None。"""
+        res = self._extract_cost_with_conf(results, min_conf=constants.DEPLOY_BAR_COST_CONFIDENCE)
+        return res[0] if res else None
+
+    def _preprocess_cost_image(self, img: np.ndarray) -> np.ndarray:
+        """预处理费用数字截图：放大后固定阈值二值化并轻微闭运算，强化白字。"""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        _, binary = cv2.threshold(
+            gray,
+            constants.DEPLOY_BAR_COST_WHITE_THRESHOLD,
+            255,
+            cv2.THRESH_BINARY,
+        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+        return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+    def _preprocess_cost_image_inv(self, img: np.ndarray) -> np.ndarray:
+        """反色二值化（黑字白底），作为固定阈值失败时的回退。"""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
 
     async def _advance_frame_in_bullet_time(self):
         """进入子弹时间后调用 p_and_esc_click 推进一帧，再退出子弹时间。
@@ -116,7 +308,7 @@ class ScriptExecutor:
             return
 
         current_frame = self.cost_sync.current_frame(count)
-        distance = CostBarSync.frame_distance(current_frame, target_frame)
+        distance = self.cost_sync.frame_distance(current_frame, target_frame)
         if self.cost_sync.debug:
             print(
                 f"[费用条同步] 目标帧={target_frame}, 当前帧={current_frame}, "
@@ -130,8 +322,9 @@ class ScriptExecutor:
             return
 
         # 已匹配目标帧或下一帧，直接执行
+        cycle = self.cost_sync.cycle_length
         if self.cost_sync.is_match(count, target_frame) or self.cost_sync.is_match(
-            count, (target_frame + 1) % 30
+            count, (target_frame + 1) % cycle
         ):
             if self.cost_sync.debug:
                 print("[费用条同步] 已匹配目标帧/下一帧，直接执行")
@@ -155,7 +348,7 @@ class ScriptExecutor:
             return
 
         current_frame = self.cost_sync.current_frame(count)
-        distance = CostBarSync.frame_distance(current_frame, target_frame)
+        distance = self.cost_sync.frame_distance(current_frame, target_frame)
         if self.cost_sync.debug:
             print(
                 f"[费用条同步-选中后] 目标帧={target_frame}, 当前帧={current_frame}, "
@@ -167,8 +360,9 @@ class ScriptExecutor:
                 print("[费用条同步-选中后] 帧差 >= 2，跳过同步直接执行")
             return
 
+        cycle = self.cost_sync.cycle_length
         if self.cost_sync.is_match(count, target_frame) or self.cost_sync.is_match(
-            count, (target_frame + 1) % 30
+            count, (target_frame + 1) % cycle
         ):
             if self.cost_sync.debug:
                 print("[费用条同步-选中后] 已匹配目标帧/下一帧，直接执行")
@@ -184,6 +378,8 @@ class ScriptExecutor:
         """仅执行操作逻辑，不处理暂停/恢复外壳。"""
         if self._stop_event.is_set():
             return
+        # 首个动作暂停后再识别费用，避免启动时截图过早/不稳定
+        self._ensure_operator_costs()
         if action.action == ActionType.DEPLOY:
             if not action.operator_name or not action.grid:
                 return
@@ -272,6 +468,19 @@ class ScriptExecutor:
                 else:
                     from models.script_schema import ItemInfo
                     self.script.items.append(ItemInfo(name=action.operator_name, charges=charges))
+
+        elif action.action == ActionType.ADD_SUMMON:
+            if not action.operator_name:
+                return
+            summon = next((s for s in self.script.summons if s.name == action.operator_name), None)
+            if summon is None:
+                raise RuntimeError(f"脚本中未定义召唤物: {action.operator_name}")
+            charges = 1
+            if action.grid and len(action.grid) > 0:
+                charges = max(1, int(action.grid[0]))
+            self.pool.activate_summon(action.operator_name, charges)
+            if self.debug:
+                print(f"[执行] 召唤物 {action.operator_name} (费用 {summon.cost}) 加入部署栏 x{charges}")
 
         elif action.action == ActionType.SPEED_UP:
             self.action.press_key("2")
@@ -411,8 +620,8 @@ class ScriptExecutor:
                         self.action.select_at(pos0[0], pos0[1])
                         await asyncio.sleep(1.0)
                     self.action.p_and_esc_click()
-                    self.timer.adjust(33.0)
-                    print("__TIMER_ADJUST__:33.0")
+                    self.timer.adjust(constants.ADVANCE_FRAME_MS)
+                    print(f"{constants.TIMER_ADJUST_MARKER}:{constants.ADVANCE_FRAME_MS}")
                     if pos0:
                         self.action.select_at(pos0[0], pos0[1])
                         await asyncio.sleep(1.0)
@@ -428,6 +637,7 @@ class ScriptExecutor:
         if self.script is None:
             raise RuntimeError("未加载脚本")
         self._stop_event.clear()
+
         units = self._build_execution_units()
         try:
             for kind, payload in units:

@@ -2,21 +2,19 @@ import pydirectinput
 import time
 from pynput.keyboard import Listener
 
+import core.constants as constants
+
 # --- 核心设置 ---
 pydirectinput.PAUSE = 0
-interval_time = 0.166
+interval_time = constants.MATCHSTICK_INTERVAL_TIME
 
 # 可配置键位（默认与原版一致）
-_KEY_PAUSE = "p"
-_KEY_SKILL = "e"
-_KEY_RETREAT = "q"
+_KEY_PAUSE = constants.DEFAULT_PAUSE_KEY
+_KEY_SKILL = constants.DEFAULT_SKILL_KEY
+_KEY_RETREAT = constants.DEFAULT_RETREAT_KEY
 
 # 划火柴热键配置（可在 GUI 中修改）
-_MATCHSTICK_HOTKEYS = {
-    "select_operator": "r",
-    "pass_166ms": "space",
-    "pass_50ms": "f",
-}
+_MATCHSTICK_HOTKEYS = constants.DEFAULT_MATCHSTICK_HOTKEYS.copy()
 _MATCHSTICK_ENABLED = {
     "select_operator": False,
     "pass_166ms": False,
@@ -73,7 +71,7 @@ def _notify_timer_shield(duration_ms: float = 500.0):
 
 def press_key(key: str):
     pydirectinput.keyDown(key)
-    time.sleep(0.05)
+    time.sleep(constants.KEY_PRESS_DURATION)
     pydirectinput.keyUp(key)
 
 

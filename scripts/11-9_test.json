@@ -1,0 +1,185 @@
+{
+  "version": "1.0",
+  "stage_code": "11-9",
+  "stage_name": "11-9",
+  "grid_rows": 7,
+  "grid_cols": 11,
+  "operators": [
+    "小车",
+    "夜刀",
+    "德狗",
+    "芬",
+    "钼铅",
+    "缪缪",
+    "艾拉",
+    "丰川祥子",
+    "ff0",
+    "莱伊",
+    "隐隐",
+    "初雪",
+    "令"
+  ],
+  "items": [
+    {
+      "name": "阿勒黛",
+      "charges": 3
+    }
+  ],
+  "summons": [
+    {
+      "name": "水精灵",
+      "cost": 0
+    },
+    {
+      "name": "足球",
+      "cost": 5
+    },
+    {
+      "name": "沙地兽",
+      "cost": 3
+    },
+    {
+      "name": "大龙",
+      "cost": 18
+    }
+  ],
+  "actions": [
+    {
+      "time_ms": 3001,
+      "action": "deploy",
+      "operator_name": "缪缪",
+      "grid": [
+        2,
+        1
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 3001,
+      "action": "add_summon",
+      "operator_name": "水精灵",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 5001,
+      "action": "deploy",
+      "operator_name": "水精灵",
+      "grid": [
+        3,
+        2
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 10001,
+      "action": "deploy",
+      "operator_name": "德狗",
+      "grid": [
+        3,
+        1
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 20034,
+      "action": "skill",
+      "operator_name": "缪缪",
+      "grid": [
+        2,
+        1
+      ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 25001,
+      "action": "skill",
+      "operator_name": "德狗",
+      "grid": null,
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 25001,
+      "action": "deploy",
+      "operator_name": "令",
+      "grid": [
+        4,
+        1
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 25001,
+      "action": "add_summon",
+      "operator_name": "大龙",
+      "grid": [
+        8,
+        0
+      ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 28001,
+      "action": "deploy",
+      "operator_name": "大龙",
+      "grid": [
+        3,
+        4
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 49001,
+      "action": "deploy",
+      "operator_name": "大龙",
+      "grid": [
+        3,
+        5
+      ],
+      "direction": "left",
+      "is_object": false
+    },
+    {
+      "time_ms": 66001,
+      "action": "deploy",
+      "operator_name": "莱伊",
+      "grid": [
+        4,
+        4
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 66001,
+      "action": "add_summon",
+      "operator_name": "沙地兽",
+      "grid": [
+        1,
+        0
+      ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 66001,
+      "action": "deploy",
+      "operator_name": "沙地兽",
+      "grid": [
+        4,
+        6
+      ],
+      "direction": "down",
+      "is_object": false
+    }
+  ]
+}

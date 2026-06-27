@@ -120,7 +120,7 @@ class OCREngine:
         # 全部失败才抛异常
         raise RuntimeError(f"PaddleOCR 初始化失败（已尝试 {engines_to_try}）: {last_error}")
 
-    def recognize(self, image: np.ndarray) -> list:
+    def recognize(self, image: np.ndarray, min_confidence: float = 0.6) -> list:
         raw_result = self._ocr.predict(image)
         lines = []
         for res in raw_result:
@@ -138,7 +138,7 @@ class OCREngine:
                 text = texts[i]
                 conf = float(scores[i]) if i < len(scores) else 0.0
                 # 过滤过低置信度的噪声，避免误识别干扰匹配
-                if bbox and text and conf >= 0.6:
+                if bbox and text and conf >= min_confidence:
                     lines.append([bbox, (text, conf)])
         if self.debug:
             self._save_debug(image, lines, raw_result)

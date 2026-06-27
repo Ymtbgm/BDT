@@ -47,14 +47,17 @@ from core.stage_selector import StageSelector
 from core.retry_handler import StageRetryHandler
 from core.cost_bar_start import CostBarStartDetector
 from core.cost_bar_sync import CostBarSync
+from core.cost_bar_sync_cc import CostBarSyncCC
+from core.cost_bar_calibration import list_calibrations
 from models.script_schema import ScriptModel
 import action
 
 
 class Runner:
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, cost_tag: Optional[str] = None):
         import time
         self.debug = debug
+        self.cost_tag = cost_tag
 
         # 先注册热键，确保在后续耗时初始化（OCR 加载等）过程中 F12 也能被响应
         self._running = False
@@ -80,8 +83,12 @@ class Runner:
         if self.debug:
             print(f"[DEBUG] OCREngine 初始化总耗时: {(t1 - t0) * 1000:.1f}ms")
 
-        self.executor = ScriptExecutor(self.capture, self.ocr, action)
-        self.cost_sync = CostBarSync(self.capture, debug=self.debug)
+        self.executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug)
+        if cost_tag:
+            print(f"[费用条同步] 使用危机合约校准模式: {cost_tag}")
+            self.cost_sync = CostBarSyncCC(self.capture, calibration_name=cost_tag, debug=self.debug)
+        else:
+            self.cost_sync = CostBarSync(self.capture, debug=self.debug)
         self.executor.set_cost_sync(self.cost_sync)
         self.leak = LeakDetector(self.capture)
         # max_side: 9999 表示不缩放，使用原图分辨率以获得最佳识别精度
@@ -293,7 +300,7 @@ class Runner:
         with open(script_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         script = ScriptModel(**data)
-        self.executor.load_script(script)
+        self.executor.load_script(script, borrow_support=borrow_support, direct_start=direct_start)
 
         print(f"脚本加载完成: {script.stage_name or '未命名'}")
         print(f"地图格子: {script.grid_rows}x{script.grid_cols}")
@@ -336,7 +343,7 @@ class Runner:
             self.executor._stop_event.clear()
             self._leak_detected = False
             # 每次重新开始都重置 executor 状态（pool、grid 等）
-            self.executor.load_script(script)
+            self.executor.load_script(script, borrow_support=borrow_support, direct_start=direct_start)
 
             # 计时器在进入关卡后启动（首次在循环外 enter_stage，重试在 handle_leak_once 后）
             offset_ms = await self._wait_for_game_start()
@@ -431,7 +438,7 @@ class Runner:
 
 async def main():
     if len(sys.argv) < 2:
-        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY]")
+        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--cost-tag {normal|cc_25|cc_50|cc_75}] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY]")
         sys.exit(1)
 
     loop_mode = "--loop" in sys.argv
@@ -440,13 +447,12 @@ async def main():
     borrow_support = "--borrow-support" in sys.argv
     direct_start = "--direct-start" in sys.argv
     challenge_mode = "--challenge-mode" in sys.argv
+    if challenge_mode and direct_start:
+        print("错误：--challenge-mode（突袭模式）与 --direct-start（直接开始作战）不能同时开启")
+        sys.exit(1)
 
     if loop_mode and direct_start:
         print("错误：--loop（无限凸图）与 --direct-start（直接开始作战）不能同时开启")
-        sys.exit(1)
-
-    if challenge_mode and direct_start:
-        print("错误：--challenge-mode（突袭模式）与 --direct-start（直接开始作战）不能同时开启")
         sys.exit(1)
 
     def _arg_int(flag: str, default: int) -> int:
@@ -478,12 +484,18 @@ async def main():
                 return sys.argv[idx + 1]
         return default
 
+    cost_tag = _arg_str("--cost-tag", None)
+
+    if cost_tag and cost_tag not in list_calibrations():
+        print(f"错误：--cost-tag 必须是 {list_calibrations()} 之一")
+        sys.exit(1)
+
     pause_key = _arg_str("--pause-key", "p")
     skill_key = _arg_str("--skill-key", "e")
     retreat_key = _arg_str("--retreat-key", "q")
     action.configure_keys(pause=pause_key, skill=skill_key, retreat=retreat_key)
 
-    runner = Runner(debug=debug_mode)
+    runner = Runner(debug=debug_mode, cost_tag=cost_tag)
     try:
         await runner.run_script(
             sys.argv[1],

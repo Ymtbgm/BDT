@@ -9,6 +9,7 @@ from pynput.keyboard import Listener
 
 from core.capture import WindowCapture
 from core.cost_bar_start import CostBarStartDetector
+import core.constants as constants
 
 
 class RegionStateTimer:
@@ -29,23 +30,24 @@ class RegionStateTimer:
 
     # 默认 ROI 基于 2560x1600 的绝对屏幕坐标 (x, y, w, h)
     # DEFAULT_ROI_A 保留仅供外部调试工具引用
-    DEFAULT_ROI_A = (2375, 53, 112, 88)
-    DEFAULT_ROI_B = (2175, 34, 128, 119)
+    DEFAULT_ROI_A = constants.DEFAULT_ROI_A
+    DEFAULT_ROI_B = constants.DEFAULT_ROI_B
 
     def __init__(
         self,
         capture: WindowCapture,
         pause_key: str = "p",
         roi_b: Optional[Tuple[int, int, int, int]] = None,
-        threshold: int = 200,
-        b_fast_threshold: int = 1200,
-        b_slow_threshold: int = 1000,
-        slow_rate: float = 0.2,
-        frame_ms: float = 33.333,
-        startup_offset_ms: float = 50.0,
-        slow_to_fast_compensation_frames: float = 1.6,
-        fast_to_slow_compensation_frames: float = 0.4,
-        rate_transition_cooldown_frames: int = 5,
+        threshold: int = constants.REGION_WHITE_THRESHOLD,
+        b_fast_threshold: int = constants.REGION_B_FAST_THRESHOLD,
+        b_slow_threshold: int = constants.REGION_B_SLOW_THRESHOLD,
+        slow_rate: float = constants.SLOW_RATE,
+        frame_ms: float = constants.FRAME_MS,
+        startup_offset_ms: float = constants.STARTUP_OFFSET_MS,
+        slow_to_fast_compensation_frames: float = constants.SLOW_TO_FAST_COMPENSATION_FRAMES,
+        fast_to_slow_compensation_frames: float = constants.FAST_TO_SLOW_COMPENSATION_FRAMES,
+        rate_transition_cooldown_frames: int = constants.RATE_TRANSITION_COOLDOWN_FRAMES,
+        sampler_interval_ms: float = 7.0,
         cost_template_path: Optional[str] = None,
         debug: bool = False,
         matchstick_hotkeys: Optional[dict] = None,
@@ -62,6 +64,7 @@ class RegionStateTimer:
         self.slow_to_fast_compensation_frames = slow_to_fast_compensation_frames
         self.fast_to_slow_compensation_frames = fast_to_slow_compensation_frames
         self.rate_transition_cooldown_frames = rate_transition_cooldown_frames
+        self._sampler_interval_ms = sampler_interval_ms
         self.debug = debug
 
         # 划火柴热键配置：{"select_operator": {"key": "r", "compensation_ms": 2.0}, ...}
@@ -87,6 +90,11 @@ class RegionStateTimer:
         self._rate_transition_cooldown = 0
         self._cost_detector: Optional[CostBarStartDetector] = None
         self._use_cost_detection = False
+
+        # 区域 B 高频采样线程
+        self._rate_samples: List[Tuple[float, Optional[int], float]] = []
+        self._sampler_thread: Optional[threading.Thread] = None
+        self._sampler_stop_event = threading.Event()
 
         # 100ms 防抖，避免误触或快速连按导致重复切换
         self._last_toggle_time: Optional[float] = None
@@ -210,6 +218,64 @@ class RegionStateTimer:
         if self.debug:
             print(f"[区域计时] 划火柴热键配置已更新: {self._matchstick_hotkeys}")
 
+    def _start_rate_sampler(self):
+        """启动区域 B 高频采样线程。"""
+        self._stop_rate_sampler()
+        self._sampler_stop_event.clear()
+        self._sampler_thread = threading.Thread(
+            target=self._rate_sampler_loop, daemon=True
+        )
+        self._sampler_thread.start()
+
+    def _stop_rate_sampler(self):
+        """停止区域 B 高频采样线程。"""
+        if self._sampler_thread is not None:
+            self._sampler_stop_event.set()
+            self._sampler_thread.join(timeout=0.5)
+            self._sampler_thread = None
+
+    def _rate_sampler_loop(self):
+        """以 _sampler_interval_ms 为间隔持续采样区域 B 倍率。"""
+        while not self._sampler_stop_event.is_set():
+            t0 = time.perf_counter()
+            count_b = self._capture_rate_state()
+            rate = self._rate
+            if count_b is not None:
+                if count_b > self.b_fast_threshold:
+                    rate = 1.0
+                elif count_b < self.b_slow_threshold:
+                    rate = self.slow_rate
+            with self._lock:
+                self._rate_samples.append((t0, count_b, rate))
+                # 只保留最近 200ms 样本，避免无限增长
+                cutoff = t0 - 0.2
+                self._rate_samples = [
+                    s for s in self._rate_samples if s[0] > cutoff
+                ]
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            sleep_ms = max(0.0, self._sampler_interval_ms - elapsed_ms)
+            if sleep_ms > 0:
+                time.sleep(sleep_ms / 1000.0)
+
+    def _get_latest_sample(self) -> Tuple[Optional[int], Optional[float]]:
+        """返回最近一次的 (count_b, rate)。"""
+        with self._lock:
+            if not self._rate_samples:
+                return None, None
+            _, count_b, rate = self._rate_samples[-1]
+            return count_b, rate
+
+    def _get_average_rate(self, start_time: float, end_time: float) -> Optional[float]:
+        """返回 [start_time, end_time] 区间内样本的平均倍率。"""
+        with self._lock:
+            samples = [
+                rate for ts, _, rate in self._rate_samples
+                if start_time <= ts <= end_time
+            ]
+        if not samples:
+            return None
+        return sum(samples) / len(samples)
+
     def _unregister_hotkey(self):
         if self._keyboard_listener is not None:
             try:
@@ -317,11 +383,13 @@ class RegionStateTimer:
         self._rate_transition_cooldown = 0
         self._toggle_events = []
         self._last_toggle_time = None
+        self._rate_samples = []
         self._use_cost_detection = (
             use_cost_detection and self._cost_template is not None
         )
         self._cost_detector = None
         self._register_hotkey()
+        self._start_rate_sampler()
         if self._use_cost_detection:
             self._cost_detector = CostBarStartDetector(
                 self.capture,
@@ -335,6 +403,7 @@ class RegionStateTimer:
 
     def stop(self):
         self._running = False
+        self._stop_rate_sampler()
         self._unregister_hotkey()
 
     def pause(self):
@@ -419,7 +488,7 @@ class RegionStateTimer:
                 info["elapsed_ms"] = self._scaled_elapsed_ms
                 return info
 
-            count_b = self._capture_rate_state()
+            count_b, _ = self._get_latest_sample()
             info["count_b"] = count_b
             if count_b is not None and count_b > self.b_fast_threshold and not self._paused:
                 self._started = True
@@ -429,19 +498,26 @@ class RegionStateTimer:
             info["elapsed_ms"] = self._scaled_elapsed_ms
             return info
 
-        count_b = self._capture_rate_state()
-        info["count_b"] = count_b
+        # 运行阶段：用采样线程的最近样本判断离散倍率，用区间平均倍率累加时间
+        latest_count_b, _ = self._get_latest_sample()
+        info["count_b"] = latest_count_b
 
-        # 保存旧倍率并计算本帧目标倍率，供 _update_time 在切换区间使用
+        # 保存旧倍率并计算本帧目标离散倍率
         self._prev_rate = self._rate
         new_rate = self._rate
-        if count_b is not None:
-            if count_b > self.b_fast_threshold:
+        if latest_count_b is not None:
+            if latest_count_b > self.b_fast_threshold:
                 new_rate = 1.0
-            elif count_b < self.b_slow_threshold:
+            elif latest_count_b < self.b_slow_threshold:
                 new_rate = self.slow_rate
 
-        self._update_time(current_rate=new_rate)
+        # 用本 tick 区间内的平均倍率累加游戏时间
+        now = time.perf_counter()
+        avg_rate = self._get_average_rate(self._last_tick_time, now) if self._last_tick_time is not None else None
+        if avg_rate is None:
+            avg_rate = new_rate
+
+        self._update_time(current_rate=avg_rate)
 
         # 区域 B 倍率判断（带迟滞，避免阈值附近反复切换导致重复补偿）
         if new_rate != self._rate:
@@ -474,7 +550,7 @@ class RegionStateTimer:
                         )
             self._rate = new_rate
             if self.debug:
-                print(f"[区域计时] 倍率切换为 {new_rate} B={count_b}")
+                print(f"[区域计时] 倍率切换为 {new_rate} B={latest_count_b}")
 
         if self._rate_transition_cooldown > 0:
             self._rate_transition_cooldown -= 1

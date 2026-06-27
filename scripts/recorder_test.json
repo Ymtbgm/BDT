@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "stage_code": "level_crisis_v2_05-01",
+  "stage_name": "level_crisis_v2_05-01",
+  "grid_rows": 8,
+  "grid_cols": 12,
+  "operators": [
+    "爱姐",
+    "拉狗"
+  ],
+  "items": [
+    {
+      "name": "书刀",
+      "charges": 10
+    }
+  ],
+  "summons": [],
+  "actions": [
+    {
+      "time_ms": 13261,
+      "action": "deploy",
+      "operator_name": "爱姐",
+      "grid": [
+        2,
+        3
+      ],
+      "direction": "right",
+      "is_object": false
+    },
+    {
+      "time_ms": 26837,
+      "action": "skill",
+      "operator_name": "爱姐",
+      "grid": [
+        2,
+        3
+      ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 34601,
+      "action": "deploy",
+      "operator_name": "拉狗",
+      "grid": [
+        2,
+        5
+      ],
+      "direction": "down",
+      "is_object": false
+    }
+  ]
+}

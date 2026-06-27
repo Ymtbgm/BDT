@@ -333,9 +333,9 @@ class ActionRecorder:
     # ------------------------------------------------------------------
     # 操作记录
     # ------------------------------------------------------------------
-    def _record_deploy(self, name: str, grid: Tuple[int, int], direction: Optional[str]):
+    def _record_deploy(self, name: str, grid: Tuple[int, int], direction: Optional[str], time_ms: Optional[int] = None):
         is_item = self._is_item(name)
-        t = int(self._now_ms())
+        t = time_ms if time_ms is not None else int(self._now_ms())
         act = OperatorAction(
             time_ms=t,
             action=ActionType.DEPLOY,
@@ -443,6 +443,7 @@ class ActionRecorder:
                     with self._lock:
                         self._state = "AWAITING_DIRECTION"
                         self._pending["grid"] = grid
+                        self._pending["time_ms"] = int(self._now_ms())
                     # 启动方向选择超时
                     self._set_timeout(self._TIMEOUT_DEPLOY_DIR, self._on_deploy_timeout)
                     if self.debug:
@@ -576,7 +577,7 @@ class ActionRecorder:
         if pending and pending.get("type") == "DEPLOY":
             if self.debug:
                 print(f"[录制器] 方向选择超时 name={pending['name']} grid={pending['grid']}")
-            self._record_deploy(pending["name"], pending["grid"], None)
+            self._record_deploy(pending["name"], pending["grid"], None, time_ms=pending.get("time_ms"))
         else:
             if self.debug:
                 print(f"[录制器] 方向选择超时但 pending 无效: {pending}")
