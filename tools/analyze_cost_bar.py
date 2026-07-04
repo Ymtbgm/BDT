@@ -48,8 +48,8 @@ def main():
     parser.add_argument(
         "--threshold",
         type=int,
-        default=200,
-        help="白像素阈值（默认 200）",
+        default=150,
+        help="白像素阈值（默认 150）",
     )
     args = parser.parse_args()
 

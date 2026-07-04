@@ -72,14 +72,28 @@ def _frame_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 def main():
     save_frames = "--save" in sys.argv or "-save" in sys.argv
+    region = "a"
+    if "--region" in sys.argv:
+        try:
+            idx = sys.argv.index("--region")
+            region = sys.argv[idx + 1].lower()
+        except Exception:
+            pass
 
     cap = WindowCapture(backend="mss")
-    roi_a = RegionStateTimer.DEFAULT_ROI_A
+    if region == "b":
+        roi = RegionStateTimer.DEFAULT_ROI_B
+    else:
+        roi = RegionStateTimer.DEFAULT_ROI_A
 
     # 加载与 RegionStateTimer 相同的模板
     templates = {}
     tmpl_root = ROOT / "core" / "resource"
-    for name in ("time_run", "pause"):
+    if region == "b":
+        tmpl_names = ("1X", "0.2X")
+    else:
+        tmpl_names = ("time_run", "pause")
+    for name in tmpl_names:
         path = str(tmpl_root / f"{name}.png")
         tmpl = _load_template(path)
         if tmpl is not None:
@@ -93,7 +107,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
         print(f"[输出] 帧将保存到: {out_dir}")
 
-    print("\n[区域A连续截图验证工具]")
+    print(f"\n[区域{region.upper()}连续截图验证工具]")
     print("按 F9 开始 1 秒 50 帧采集（请提前让游戏处于暂停态，采集期间按恢复键）")
     print("按 ESC 退出")
 
@@ -115,7 +129,7 @@ def main():
             prev_gray: Optional[np.ndarray] = None
             for i in range(50):
                 t0 = time.perf_counter()
-                gray = _capture_gray(cap, roi_a)
+                gray = _capture_gray(cap, roi)
                 ts = (time.perf_counter() - start) * 1000.0
                 if gray is not None:
                     scores = {

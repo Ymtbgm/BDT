@@ -4,7 +4,8 @@ from core.region_state_timer import RegionStateTimer
 from gui.timer_overlay import TimerOverlay
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QTextEdit, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QComboBox,
+    QSizePolicy, QTextEdit, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -22,7 +23,7 @@ class TimerTab(QWidget):
         layout.addWidget(
             QLabel(
                 "暂停区域 : 控制计时/暂停 | "
-                "倍速区域 : 控制倍率 1.0x / 0.2x"
+                "倍速区域 : 控制倍率 2.0x / 1.0x / 0.2x"
             )
         )
 
@@ -47,6 +48,18 @@ class TimerTab(QWidget):
         self.main_window.chk_timer_debug = QCheckBox("Debug 输出")
         layout.addWidget(self.main_window.chk_timer_debug)
 
+        self.main_window.combo_timer_cost_tag = QComboBox()
+        self.main_window.combo_timer_cost_tag.addItem("无", "")
+        self.main_window.combo_timer_cost_tag.addItem("费用回复降低25%", "cc_25")
+        self.main_window.combo_timer_cost_tag.addItem("费用回复降低50%", "cc_50")
+        self.main_window.combo_timer_cost_tag.addItem("费用回复降低75%", "cc_75")
+        self.main_window.combo_timer_cost_tag.setMaximumWidth(200)
+        self.main_window.combo_timer_cost_tag.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        layout.addWidget(QLabel("计时器费用条 tag"))
+        layout.addWidget(self.main_window.combo_timer_cost_tag)
+
         self.main_window.timer_status = QLabel("状态: 就绪")
         layout.addWidget(self.main_window.timer_status)
 
@@ -59,8 +72,8 @@ class TimerTab(QWidget):
                 <li>在编队界面，点击<b>开始计时</b>后，主窗口会自动最小化，并在屏幕左上角显示悬浮计时器。</li>
                 <li>计时器窗口默认置顶，可拖动到任意位置，不会被游戏遮挡。</li>
                 <li>检测到正式开始游戏(费用条开始动)后自动开始计时。</li>
-                <li>采用白像素匹配，<span style="color: red;">因此计时请在1倍速下使用，且不要鼠标操作暂停键，使用快捷键操作。</span></li>
-                <li>初始就可能会有几帧误差，如果一直高频切换暂停和恢复会拉大误差。<li>
+                <li>对三个区域持续模板监控，<span style="color: red;">因此请使用快捷键控制倍速和暂停，不要鼠标操作暂停键和倍率区，不要鼠标触碰到费用条。</span></li>
+                <li>在费用条满之前会持续对费用条监控，通常不会存在误差；费用条满后不再监控费用条，通常情况下误差会在1帧内，刻意反复频繁操作会增大误差。<li>
             </ul>
             """
         )
@@ -72,7 +85,7 @@ class TimerTab(QWidget):
         hotkeys = matchstick_cfg.get("hotkeys", {})
         enabled = matchstick_cfg.get("enabled", {})
         compensation_map = {
-            "select_operator": 2.0,
+            "select_operator": 3.0,
             "pass_166ms": 33.3,
             "pass_50ms": 10.0,
         }
@@ -93,11 +106,14 @@ class TimerTab(QWidget):
             self.main_window._timer_capture = WindowCapture(backend="mss")
             matchstick_hotkeys = self._build_matchstick_hotkeys()
 
+            cost_tag = self.main_window.combo_timer_cost_tag.currentData() or None
+
             self.main_window._region_timer = RegionStateTimer(
                 self.main_window._timer_capture,
                 pause_key=action.pause_key(),
                 debug=self.main_window.chk_timer_debug.isChecked(),
                 matchstick_hotkeys=matchstick_hotkeys if matchstick_hotkeys else None,
+                cost_bar_calibration_name=cost_tag,
             )
             self.main_window._region_timer.start(use_cost_detection=True)
         except Exception as e:
@@ -114,8 +130,8 @@ class TimerTab(QWidget):
         self.main_window._timer_qtimer = QTimer(self.main_window)
         self.main_window._timer_qtimer.setTimerType(Qt.TimerType.PreciseTimer)
         self.main_window._timer_qtimer.timeout.connect(self._on_timer_tick)
-        # 界面刷新保持 20ms，区域 B 采样由 RegionStateTimer 独立线程负责
-        self.main_window._timer_qtimer.start(20)
+        # 界面刷新改为 33ms，与游戏 30fps 对齐；区域 B 采样仍由 RegionStateTimer 独立线程负责
+        self.main_window._timer_qtimer.start(33)
 
         self.main_window._timer_started = False
         self.main_window.btn_timer_start.setEnabled(False)
@@ -174,11 +190,11 @@ class TimerTab(QWidget):
             return
         if self.main_window._timer_qtimer is not None:
             self.main_window._timer_qtimer.stop()
-        self.main_window._region_timer.start()
+        self.main_window._region_timer.start(use_cost_detection=True)
         self.main_window._region_timer.manual_pause()
         if self.main_window._timer_overlay is not None:
             self.main_window._timer_overlay.update_time(0.0, 0, 0, 1.0, True)
             self.main_window._timer_overlay.set_pause_text(True)
         self.main_window.timer_status.setText("状态: 已重置并暂停，点击继续后开始计时")
         if self.main_window._timer_qtimer is not None:
-            self.main_window._timer_qtimer.start(20)
+            self.main_window._timer_qtimer.start(33)

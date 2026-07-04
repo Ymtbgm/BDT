@@ -110,7 +110,7 @@ def parse_args():
         help="费用回复降低 tag（25/50/75），未指定时进入交互选择",
     )
     parser.add_argument("--count", type=int, help="截图帧数，默认按 tag 预设")
-    parser.add_argument("--threshold", type=int, default=200, help="白像素灰度阈值，默认 200")
+    parser.add_argument("--threshold", type=int, default=150, help="白像素灰度阈值，默认 150")
     parser.add_argument(
         "--out-dir", type=Path, help="输出目录，默认 debug/cost_bar_cc/{tag}"
     )

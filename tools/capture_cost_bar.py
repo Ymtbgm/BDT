@@ -54,7 +54,7 @@ def parse_args():
     group.add_argument("--fps", type=float, help="自动截图帧率(fps)，与 --interval 二选一")
     parser.add_argument("--count", type=int, default=30, help="自动截图帧数，默认 30")
     parser.add_argument("--out-dir", type=Path, help="输出目录，默认 debug/cost_bar_frames")
-    parser.add_argument("--threshold", type=int, default=200, help="白像素灰度阈值，默认 200")
+    parser.add_argument("--threshold", type=int, default=150, help="白像素灰度阈值，默认 150")
     parser.add_argument(
         "--roi",
         type=float,

@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
     chk_debug: QCheckBox
     chk_direct_start: QCheckBox
     chk_challenge_mode: QCheckBox
+    chk_speed2x: QCheckBox
     chk_borrow_support: QCheckBox
     spin_support_friend: QSpinBox
     combo_support_skill: QComboBox
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
     combo_pause_key: QComboBox
     line_skill_key: QLineEdit
     line_retreat_key: QLineEdit
+    line_speed_key: QLineEdit
     btn_run: QPushButton
     btn_stop: QPushButton
     status_label: QLabel
@@ -260,6 +262,7 @@ class MainWindow(QMainWindow):
             self._normalize_key_name(self.combo_pause_key.currentText()),
             self._normalize_key_name(self.line_skill_key.text()),
             self._normalize_key_name(self.line_retreat_key.text()),
+            self._normalize_key_name(self.line_speed_key.text()),
         }
 
     def _save_config(self):
@@ -271,6 +274,7 @@ class MainWindow(QMainWindow):
             "debug": self.chk_debug.isChecked(),
             "direct_start": self.chk_direct_start.isChecked(),
             "challenge_mode": self.chk_challenge_mode.isChecked(),
+            "speed2x": self.chk_speed2x.isChecked(),
             "cost_tag": self.combo_cost_tag.currentData() or "",
             "rec_debug": self.rec_chk_debug.isChecked(),
             "rec_stage_name": self.rec_stage_name.text(),
@@ -289,6 +293,7 @@ class MainWindow(QMainWindow):
             "pause_key": self._normalize_key_name(self.combo_pause_key.currentText()),
             "skill_key": self._normalize_key_name(self.line_skill_key.text()),
             "retreat_key": self._normalize_key_name(self.line_retreat_key.text()),
+            "speed_key": self._normalize_key_name(self.line_speed_key.text()),
             "matchstick": {
                 "select_operator": {
                     "hotkey": self._normalize_hotkey(self.line_matchstick_select.text()),
@@ -323,6 +328,7 @@ class MainWindow(QMainWindow):
         self.chk_debug.setChecked(config.get("debug", False))
         self.chk_direct_start.setChecked(direct_start)
         self.chk_challenge_mode.setChecked(config.get("challenge_mode", False))
+        self.chk_speed2x.setChecked(config.get("speed2x", False))
         cost_tag = config.get("cost_tag", "")
         if cost_tag:
             idx = self.combo_cost_tag.findData(cost_tag)
@@ -359,12 +365,14 @@ class MainWindow(QMainWindow):
 
         self.line_skill_key.setText(self._normalize_key_name(config.get("skill_key", "e")))
         self.line_retreat_key.setText(self._normalize_key_name(config.get("retreat_key", "q")))
+        self.line_speed_key.setText(self._normalize_key_name(config.get("speed_key", "f")))
 
         # 同步游戏内快捷键到 action 模块（GUI 进程也运行划火柴监听，需要一致）
         action.configure_keys(
             pause=self._normalize_key_name(config.get("pause_key", "p")),
             skill=self._normalize_key_name(config.get("skill_key", "e")),
             retreat=self._normalize_key_name(config.get("retreat_key", "q")),
+            speed=self._normalize_key_name(config.get("speed_key", "f")),
         )
 
         # 划火柴热键配置

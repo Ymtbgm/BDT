@@ -103,6 +103,7 @@ class ExecTab(QWidget):
         self.main_window.chk_debug = QCheckBox("Debug (--debug)")
         self.main_window.chk_direct_start = QCheckBox("直接开始作战 (--direct-start)")
         self.main_window.chk_challenge_mode = QCheckBox("突袭模式")
+        self.main_window.chk_speed2x = QCheckBox("二倍速凸图")
         self.main_window.chk_loop.stateChanged.connect(self._on_loop_changed)
         self.main_window.chk_direct_start.stateChanged.connect(self._on_direct_start_changed)
         self.main_window.chk_challenge_mode.stateChanged.connect(self._on_challenge_mode_changed)
@@ -111,6 +112,7 @@ class ExecTab(QWidget):
         params_layout.addWidget(self.main_window.chk_debug)
         params_layout.addWidget(self.main_window.chk_direct_start)
         params_layout.addWidget(self.main_window.chk_challenge_mode)
+        params_layout.addWidget(self.main_window.chk_speed2x)
         params_layout.addStretch()
         layout.addWidget(params_group)
 
@@ -165,9 +167,16 @@ class ExecTab(QWidget):
         self.main_window.line_retreat_key.setFixedWidth(60)
         keys_layout.addWidget(self.main_window.line_retreat_key)
 
+        keys_layout.addWidget(QLabel("倍速键"))
+        self.main_window.line_speed_key = QLineEdit("f")
+        self.main_window.line_speed_key.setMaxLength(8)
+        self.main_window.line_speed_key.setFixedWidth(60)
+        keys_layout.addWidget(self.main_window.line_speed_key)
+
         self.main_window.combo_pause_key.currentTextChanged.connect(self._on_game_key_changed)
         self.main_window.line_skill_key.textChanged.connect(self._on_game_key_changed)
         self.main_window.line_retreat_key.textChanged.connect(self._on_game_key_changed)
+        self.main_window.line_speed_key.textChanged.connect(self._on_game_key_changed)
 
         keys_layout.addStretch()
         layout.addWidget(keys_group)
@@ -379,6 +388,7 @@ class ExecTab(QWidget):
             pause=self.main_window._normalize_key_name(self.main_window.combo_pause_key.currentText()),
             skill=self.main_window._normalize_key_name(self.main_window.line_skill_key.text()),
             retreat=self.main_window._normalize_key_name(self.main_window.line_retreat_key.text()),
+            speed=self.main_window._normalize_key_name(self.main_window.line_speed_key.text()),
         )
 
     def _on_matchstick_enabled_changed(self, state):
@@ -431,6 +441,8 @@ class ExecTab(QWidget):
             args.append("--direct-start")
         if self.main_window.chk_challenge_mode.isChecked():
             args.append("--challenge-mode")
+        if self.main_window.chk_speed2x.isChecked():
+            args.append("--speed2x")
         cost_tag = self.main_window.combo_cost_tag.currentData()
         if cost_tag:
             args.extend(["--cost-tag", cost_tag])
@@ -449,6 +461,7 @@ class ExecTab(QWidget):
             "--pause-key", self.main_window._normalize_key_name(self.main_window.combo_pause_key.currentText()),
             "--skill-key", self.main_window._normalize_key_name(self.main_window.line_skill_key.text()),
             "--retreat-key", self.main_window._normalize_key_name(self.main_window.line_retreat_key.text()),
+            "--speed-key", self.main_window._normalize_key_name(self.main_window.line_speed_key.text()),
         ])
 
         self.main_window.process = QProcess()

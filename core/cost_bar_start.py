@@ -1,11 +1,16 @@
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
 
 from core.capture import WindowCapture
+from core.cost_bar_sync import CostBarSync
+from core.cost_bar_sync_cc import CostBarSyncCC
+
+
+CostBarSyncType = Union[CostBarSync, CostBarSyncCC]
 
 
 class CostBarStartDetector:
@@ -33,10 +38,12 @@ class CostBarStartDetector:
         self,
         capture: WindowCapture,
         cost_template: np.ndarray,
+        cost_bar_sync: Optional[CostBarSyncType] = None,
         debug: bool = False,
     ):
         self.capture = capture
         self.cost_template = cost_template
+        self._cost_bar_sync = cost_bar_sync
         self.debug = debug
         self._state = self.STATE_WAIT_COST
         self._wait_37frames_until: float = 0.0
@@ -44,6 +51,12 @@ class CostBarStartDetector:
         self._bar_prev_roi: Optional[np.ndarray] = None
         self._cost_roi: Optional[Tuple[int, int, int, int]] = None
         self._bar_roi: Optional[Tuple[int, int, int, int]] = None
+        # 基于校准表的启动检测参数
+        self._min_start_frame = 2
+        self._confirm_frames = 2
+        self._bar_confirm_frame: Optional[int] = None
+        self._bar_confirm_start: Optional[float] = None
+        self._bar_confirm_count: int = 0
         self._refresh_rois()
 
     def _refresh_rois(self):
@@ -70,6 +83,9 @@ class CostBarStartDetector:
         self._wait_37frames_until = 0.0
         self._bar_start_time = 0.0
         self._bar_prev_roi = None
+        self._bar_confirm_frame = None
+        self._bar_confirm_start = None
+        self._bar_confirm_count = 0
         self._refresh_rois()
 
     @property
@@ -109,8 +125,17 @@ class CostBarStartDetector:
             if max_val >= cost_threshold:
                 if self.debug:
                     print(f"[计时校准] COST 图标已检测到 (置信度: {max_val:.3f})")
-                self._state = self.STATE_WAIT_37FRAMES
-                self._wait_37frames_until = time.perf_counter() + 37 / 30.0
+                if self._cost_bar_sync is not None:
+                    # 有校准时直接开始观察费用条帧号变化
+                    self._state = self.STATE_WAIT_BAR
+                    self._bar_start_time = time.perf_counter()
+                    self._bar_prev_roi = None
+                    self._bar_confirm_frame = None
+                    self._bar_confirm_start = None
+                    self._bar_confirm_count = 0
+                else:
+                    self._state = self.STATE_WAIT_37FRAMES
+                    self._wait_37frames_until = time.perf_counter() + 37 / 30.0
         except Exception as e:
             if self.debug:
                 print(f"[DEBUG] COST 检测异常: {e}")
@@ -139,6 +164,74 @@ class CostBarStartDetector:
             self._state = self.STATE_DONE
             return 0.0
 
+        if self._cost_bar_sync is not None:
+            return self._tick_wait_bar_calibration()
+        return self._tick_wait_bar_diff(diff_threshold)
+
+    def _capture_bar_gray(self) -> Optional[np.ndarray]:
+        if self._bar_roi is None:
+            return None
+        x, y, w, h = self._bar_roi
+        try:
+            roi = self.capture.capture_roi(x, y, w, h)
+            if roi.size == 0:
+                return None
+            return cv2.cvtColor(roi, cv2.COLOR_BGRA2GRAY)
+        except Exception as e:
+            if self.debug:
+                print(f"[DEBUG] 费用条 ROI 截取异常: {e}")
+            return None
+
+    def _tick_wait_bar_calibration(self) -> Optional[float]:
+        """基于费用条校准表检测启动。
+
+        适用于危机合约等慢回费 tag：不依赖相邻帧差分，而是等费用条帧号
+        连续多帧匹配成功后，用最后一帧的帧号反推游戏已开始的时间。
+        """
+        gray = self._capture_bar_gray()
+        if gray is None or self._cost_bar_sync is None:
+            return None
+
+        count = self._cost_bar_sync.white_pixel_count(gray)
+        frame = self._cost_bar_sync.current_frame(count)
+        matched = (
+            frame is not None
+            and frame >= self._min_start_frame
+            and self._cost_bar_sync.is_match(count, frame)
+        )
+        if self.debug:
+            print(
+                f"[DEBUG] 费用条 count={count}, frame={frame}, matched={matched}, "
+                f"confirm={self._bar_confirm_count}"
+            )
+
+        if matched:
+            if self._bar_confirm_count == 0:
+                self._bar_confirm_start = time.perf_counter()
+            self._bar_confirm_count += 1
+
+            if self._bar_confirm_count >= self._confirm_frames:
+                now = time.perf_counter()
+                elapsed_at_match = (
+                    frame * self._cost_bar_sync.frame_duration_ms
+                    + self._cost_bar_sync.frame_offset_ms
+                )
+                latency_ms = (now - self._bar_confirm_start) * 1000.0
+                offset_ms = elapsed_at_match + latency_ms
+                if self.debug:
+                    print(
+                        f"[计时校准] 费用条帧匹配启动: frame={frame}, "
+                        f"elapsed_at_match={elapsed_at_match:.1f}ms, latency={latency_ms:.1f}ms, "
+                        f"offset={offset_ms:.1f}ms"
+                    )
+                self._state = self.STATE_DONE
+                return offset_ms
+        else:
+            self._bar_confirm_start = None
+            self._bar_confirm_count = 0
+        return None
+
+    def _tick_wait_bar_diff(self, diff_threshold: float) -> Optional[float]:
         x, y, w, h = self._bar_roi
         try:
             roi = self.capture.capture_roi(x, y, w, h)

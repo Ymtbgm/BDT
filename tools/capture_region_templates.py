@@ -17,6 +17,7 @@ from core.capture import WindowCapture
 DEFAULT_ROIS = {
     "region_a": (2375, 53, 112, 88),
     "region_b": (2175, 34, 128, 119),
+    "rate_2x": (2175, 34, 128, 119),
 }
 
 
@@ -50,6 +51,7 @@ def main():
         print(f"  {label}: x={roi[0]}, y={roi[1]}, w={roi[2]}, h={roi[3]}")
     print("操作说明:")
     print("  F9  - 截取两个区域当前帧并保存")
+    print("  F10 - 保存 2x 倍率模板到 core/resource/2X.png")
     print("  ESC - 退出")
     print("若 ROI 位置不对，可修改本文件中的 DEFAULT_ROIS。")
 
@@ -63,6 +65,22 @@ def main():
                 frame_idx += 1
             except Exception as e:
                 print(f"截图失败: {e}")
+            time.sleep(0.3)
+
+        elif keyboard.is_pressed("f10"):
+            try:
+                roi = DEFAULT_ROIS["rate_2x"]
+                img = capture_region(cap, roi)
+                tmpl_path = ROOT / "core" / "resource" / "2X.png"
+                cv2.imencode(".png", img)[1].tofile(str(tmpl_path))
+                gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+                print(
+                    f"已保存 2x 模板到 {tmpl_path}: "
+                    f"平均灰度={float(np.mean(gray)):.1f}, "
+                    f"白像素={int(np.sum(gray > 200))}/{gray.size}"
+                )
+            except Exception as e:
+                print(f"保存 2x 模板失败: {e}")
             time.sleep(0.3)
 
         elif keyboard.is_pressed("esc"):

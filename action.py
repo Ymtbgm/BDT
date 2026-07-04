@@ -12,6 +12,7 @@ interval_time = constants.MATCHSTICK_INTERVAL_TIME
 _KEY_PAUSE = constants.DEFAULT_PAUSE_KEY
 _KEY_SKILL = constants.DEFAULT_SKILL_KEY
 _KEY_RETREAT = constants.DEFAULT_RETREAT_KEY
+_KEY_SPEED = constants.DEFAULT_SPEED_KEY
 
 # 划火柴热键配置（可在 GUI 中修改）
 _MATCHSTICK_HOTKEYS = constants.DEFAULT_MATCHSTICK_HOTKEYS.copy()
@@ -23,15 +24,17 @@ _MATCHSTICK_ENABLED = {
 _keyboard_listener = None
 
 
-def configure_keys(pause: str = None, skill: str = None, retreat: str = None):
+def configure_keys(pause: str = None, skill: str = None, retreat: str = None, speed: str = None):
     """配置游戏内快捷键，适配不同用户的键位设置。"""
-    global _KEY_PAUSE, _KEY_SKILL, _KEY_RETREAT
+    global _KEY_PAUSE, _KEY_SKILL, _KEY_RETREAT, _KEY_SPEED
     if pause:
         _KEY_PAUSE = pause.lower()
     if skill:
         _KEY_SKILL = skill.lower()
     if retreat:
         _KEY_RETREAT = retreat.lower()
+    if speed:
+        _KEY_SPEED = speed.lower()
 
 
 def configure_matchstick(hotkeys: dict = None, enabled: dict = None):
@@ -61,6 +64,10 @@ def skill_key() -> str:
 
 def retreat_key() -> str:
     return _KEY_RETREAT
+
+
+def speed_key() -> str:
+    return _KEY_SPEED
 
 
 def _notify_timer_shield(duration_ms: float = 500.0):

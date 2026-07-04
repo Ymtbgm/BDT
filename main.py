@@ -37,6 +37,7 @@ sys.stderr = _AutoFlush(sys.stderr)
 import cv2
 import numpy as np
 import keyboard
+import pydirectinput
 from pathlib import Path
 
 from core.capture import WindowCapture
@@ -88,7 +89,16 @@ class Runner:
             print(f"[费用条同步] 使用危机合约校准模式: {cost_tag}")
             self.cost_sync = CostBarSyncCC(self.capture, calibration_name=cost_tag, debug=self.debug)
         else:
-            self.cost_sync = CostBarSync(self.capture, debug=self.debug)
+            print("[费用条同步] 使用普通模式校准表（前 10s 区分 29 帧）")
+            self.cost_sync = CostBarSyncCC(
+                self.capture,
+                calibration_name="normal",
+                calibration_schedule=[
+                    (0.0, "normal_early"),
+                    (10000.0, "normal"),
+                ],
+                debug=self.debug,
+            )
         self.executor.set_cost_sync(self.cost_sync)
         self.leak = LeakDetector(self.capture)
         # max_side: 9999 表示不缩放，使用原图分辨率以获得最佳识别精度
@@ -291,6 +301,7 @@ class Runner:
         support_module: int = 1,
         direct_start: bool = False,
         challenge_mode: bool = False,
+        speed2x: bool = False,
     ):
         if self._abort:
             print("[紧急暂停] 初始化阶段已收到暂停指令，直接退出")
@@ -355,6 +366,40 @@ class Runner:
                 if self.debug:
                     print("[计时校准] 检测失败，直接启动计时器")
                 self.executor.timer.start()
+
+            # 二倍数凸图：在费用条开始移动后，立即暂停，再在暂停状态下切 2 倍速并压缩未来操作时间
+            if speed2x:
+                # 先暂停游戏和计时器，避免在 1x 速度下继续跑时间
+                pydirectinput.keyDown(action.pause_key())
+                self.executor.timer.pause()
+                await asyncio.sleep(0.05)
+                pydirectinput.keyUp(action.pause_key())
+                await asyncio.sleep(1.0)
+
+                current_ms = self.executor.calibrate_timer_at_pause()
+                speed_script = script.model_copy(deep=True)
+                if self.debug:
+                    print(f"[二倍数凸图] 当前时间 {current_ms:.1f}ms，开始压缩未来操作时间")
+                for action_item in speed_script.actions:
+                    if action_item.time_ms > current_ms:
+                        original_time = action_item.time_ms
+                        action_item.time_ms = int(current_ms + (action_item.time_ms - current_ms) / 2)
+                        if self.debug:
+                            print(f"  {action_item.action.value} {action_item.operator_name}: 原始={original_time}ms -> 压缩={action_item.time_ms}ms")
+                speed_script.sort_actions()
+                self.executor.load_script(speed_script, borrow_support=borrow_support, direct_start=direct_start)
+                self.executor.set_speed2x_reference(current_ms)
+                if self.debug:
+                    print(f"[二倍数凸图] 已压缩未来操作时间，当前时间 {current_ms:.1f}ms")
+
+                action.press_key(action.speed_key())
+                await asyncio.sleep(0.5)
+
+                pydirectinput.keyDown(action.pause_key())
+                self.executor.timer.resume()
+                await asyncio.sleep(0.05)
+                pydirectinput.keyUp(action.pause_key())
+                await asyncio.sleep(0.1)
 
             # 启动漏怪监控（模板匹配）
             leak_task = None
@@ -438,7 +483,7 @@ class Runner:
 
 async def main():
     if len(sys.argv) < 2:
-        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--cost-tag {normal|cc_25|cc_50|cc_75}] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY]")
+        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--speed2x] [--cost-tag {normal|cc_25|cc_50|cc_75}] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY] [--speed-key KEY]")
         sys.exit(1)
 
     loop_mode = "--loop" in sys.argv
@@ -447,6 +492,7 @@ async def main():
     borrow_support = "--borrow-support" in sys.argv
     direct_start = "--direct-start" in sys.argv
     challenge_mode = "--challenge-mode" in sys.argv
+    speed2x = "--speed2x" in sys.argv
     if challenge_mode and direct_start:
         print("错误：--challenge-mode（突袭模式）与 --direct-start（直接开始作战）不能同时开启")
         sys.exit(1)
@@ -493,7 +539,8 @@ async def main():
     pause_key = _arg_str("--pause-key", "p")
     skill_key = _arg_str("--skill-key", "e")
     retreat_key = _arg_str("--retreat-key", "q")
-    action.configure_keys(pause=pause_key, skill=skill_key, retreat=retreat_key)
+    speed_key = _arg_str("--speed-key", "f")
+    action.configure_keys(pause=pause_key, skill=skill_key, retreat=retreat_key, speed=speed_key)
 
     runner = Runner(debug=debug_mode, cost_tag=cost_tag)
     try:
@@ -507,6 +554,7 @@ async def main():
             support_module=support_module,
             direct_start=direct_start,
             challenge_mode=challenge_mode,
+            speed2x=speed2x,
         )
     finally:
         # 显式清理本进程注册的全局键盘钩子，避免退出后残留影响 GUI 进程

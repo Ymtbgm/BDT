@@ -43,6 +43,10 @@ class CostBarSync:
     def cycle_length(self) -> int:
         return 30
 
+    @property
+    def frame_duration_ms(self) -> float:
+        return 1000.0 / 30.0
+
     def _roi_abs(self) -> Tuple[int, int, int, int]:
         """根据窗口大小计算费用条 ROI 的绝对屏幕坐标。"""
         w, h = self.capture.get_window_size()
@@ -68,7 +72,7 @@ class CostBarSync:
 
     def white_pixel_count(self, roi_gray: Optional[np.ndarray] = None) -> Optional[int]:
         """统计 ROI 内白像素（灰度 > threshold）数量。"""
-        img = roi_gray or self.capture_roi_gray()
+        img = roi_gray if roi_gray is not None else self.capture_roi_gray()
         if img is None:
             return None
         return int(np.sum(img > self.threshold))

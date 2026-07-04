@@ -226,8 +226,6 @@ class EditorTab(QWidget):
             ActionType.DEPLOY: "部署",
             ActionType.RETREAT: "撤退",
             ActionType.SKILL: "技能",
-            ActionType.SPEED_UP: "加速",
-            ActionType.SPEED_DOWN: "减速",
             ActionType.PAUSE: "暂停",
             ActionType.ADD_ITEM: "部署区新增道具",
             ActionType.ADD_SUMMON: "部署区新增召唤物",
@@ -237,6 +235,8 @@ class EditorTab(QWidget):
         right_panel.addWidget(QLabel("操作类型"))
         self.main_window.combo_action = QComboBox()
         for act in ActionType:
+            if act in (ActionType.SPEED_UP, ActionType.SPEED_DOWN):
+                continue
             self.main_window.combo_action.addItem(self.main_window._action_labels.get(act, act.value), act)
         right_panel.addWidget(self.main_window.combo_action)
 

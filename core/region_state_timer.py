@@ -1,7 +1,7 @@
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -9,7 +9,131 @@ from pynput.keyboard import Listener
 
 from core.capture import WindowCapture
 from core.cost_bar_start import CostBarStartDetector
+from core.cost_bar_sync import CostBarSync
+from core.cost_bar_sync_cc import CostBarSyncCC
 import core.constants as constants
+
+
+CostBarSyncType = Union[CostBarSync, CostBarSyncCC]
+
+
+class _RateTemplateMatcher:
+    """基于 1x/2x/0.2x 图标模板 + 帧间差分判定倍率状态。"""
+
+    STATE_FAST = "fast"
+    STATE_FAST2X = "fast2x"
+    STATE_SLOW = "slow"
+    STATE_TRANSITION = "transition"
+
+    def __init__(
+        self,
+        fast_path: str,
+        slow_path: str,
+        fast2x_path: Optional[str] = None,
+        match_confidence: float = constants.RATE_TEMPLATE_MATCH_CONFIDENCE,
+        transition_confidence: float = constants.RATE_TEMPLATE_TRANSITION_CONFIDENCE,
+        diff_threshold: float = constants.RATE_TEMPLATE_DIFF_THRESHOLD,
+        debug: bool = False,
+    ):
+        self._debug = debug
+        self._match_confidence = match_confidence
+        self._transition_confidence = transition_confidence
+        self._diff_threshold = diff_threshold
+        self._mask_threshold = constants.RATE_TEMPLATE_MASK_THRESHOLD
+        self._tmpl_fast, self._mask_fast = self._load_template(fast_path)
+        self._tmpl_slow, self._mask_slow = self._load_template(slow_path)
+        self._tmpl_fast2x, self._mask_fast2x = (
+            self._load_template(fast2x_path) if fast2x_path else (None, None)
+        )
+        self.available = (
+            self._tmpl_fast is not None
+            and self._tmpl_slow is not None
+            and self._mask_fast is not None
+            and self._mask_slow is not None
+        )
+        self._prev_gray: Optional[np.ndarray] = None
+
+    def _load_template(self, path: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        try:
+            img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+            if img is None:
+                return None, None
+            if img.ndim == 3 and img.shape[2] == 4:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+                alpha = img[:, :, 3]
+                # 掩膜仅保留不透明且高亮的像素，避免把背景/暂停暗化层纳入匹配
+                mask = (
+                    (alpha > self._mask_threshold)
+                    & (gray > self._mask_threshold)
+                ).astype(np.uint8) * 255
+            elif img.ndim == 3:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                _, mask = cv2.threshold(gray, self._mask_threshold, 255, cv2.THRESH_BINARY)
+            else:
+                gray = img
+                _, mask = cv2.threshold(gray, self._mask_threshold, 255, cv2.THRESH_BINARY)
+            return gray, mask
+        except Exception:
+            return None, None
+
+    def _match_score(self, roi: np.ndarray, tmpl: np.ndarray, mask: np.ndarray) -> float:
+        if (
+            tmpl is None
+            or mask is None
+            or roi.shape[0] < tmpl.shape[0]
+            or roi.shape[1] < tmpl.shape[1]
+        ):
+            return 0.0
+        try:
+            result = cv2.matchTemplate(roi, tmpl, cv2.TM_CCORR_NORMED, mask=mask)
+        except Exception:
+            return 0.0
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        return float(max_val)
+
+    def _frame_diff(self, gray: np.ndarray) -> float:
+        if self._prev_gray is None or self._prev_gray.shape != gray.shape:
+            return 0.0
+        diff = cv2.absdiff(gray, self._prev_gray)
+        return float(np.mean(diff))
+
+    def _decide_state(
+        self,
+        score_fast: float,
+        score_slow: float,
+        score_fast2x: float,
+        mean_diff: float,
+    ) -> str:
+        """按三个模板相似度决定倍率；2x 需要达到置信度阈值才被采纳。"""
+        if (
+            score_fast2x >= self._match_confidence
+            and score_fast2x >= score_fast
+            and score_fast2x >= score_slow
+        ):
+            return self.STATE_FAST2X
+        return self.STATE_FAST if score_fast >= score_slow else self.STATE_SLOW
+
+    def match(self, gray_b: np.ndarray) -> Tuple[float, float, float, float, str]:
+        """返回 (score_fast, score_slow, score_fast2x, mean_diff, state)。"""
+        score_fast = (
+            self._match_score(gray_b, self._tmpl_fast, self._mask_fast)
+            if self._tmpl_fast is not None
+            else 0.0
+        )
+        score_slow = (
+            self._match_score(gray_b, self._tmpl_slow, self._mask_slow)
+            if self._tmpl_slow is not None
+            else 0.0
+        )
+        score_fast2x = (
+            self._match_score(gray_b, self._tmpl_fast2x, self._mask_fast2x)
+            if self._tmpl_fast2x is not None
+            else 0.0
+        )
+        mean_diff = self._frame_diff(gray_b)
+        self._prev_gray = gray_b.copy()
+        state = self._decide_state(score_fast, score_slow, score_fast2x, mean_diff)
+        return score_fast, score_slow, score_fast2x, mean_diff, state
 
 
 class RegionStateTimer:
@@ -42,15 +166,21 @@ class RegionStateTimer:
         b_fast_threshold: int = constants.REGION_B_FAST_THRESHOLD,
         b_slow_threshold: int = constants.REGION_B_SLOW_THRESHOLD,
         slow_rate: float = constants.SLOW_RATE,
+        fast2x_rate: float = constants.FAST2X_RATE,
         frame_ms: float = constants.FRAME_MS,
         startup_offset_ms: float = constants.STARTUP_OFFSET_MS,
         slow_to_fast_compensation_frames: float = constants.SLOW_TO_FAST_COMPENSATION_FRAMES,
         fast_to_slow_compensation_frames: float = constants.FAST_TO_SLOW_COMPENSATION_FRAMES,
+        fast_to_fast2x_compensation_frames: float = 0.0,
+        fast2x_to_fast_compensation_frames: float = 0.0,
         rate_transition_cooldown_frames: int = constants.RATE_TRANSITION_COOLDOWN_FRAMES,
         sampler_interval_ms: float = 7.0,
         cost_template_path: Optional[str] = None,
         debug: bool = False,
         matchstick_hotkeys: Optional[dict] = None,
+        use_template_matching: bool = True,
+        rate_template_dir: Optional[str] = None,
+        cost_bar_calibration_name: Optional[str] = None,
     ):
         self.capture = capture
         self._pause_key = pause_key
@@ -59,10 +189,13 @@ class RegionStateTimer:
         self.b_fast_threshold = b_fast_threshold
         self.b_slow_threshold = b_slow_threshold
         self.slow_rate = slow_rate
+        self.fast2x_rate = fast2x_rate
         self.frame_ms = frame_ms
         self.startup_offset_ms = startup_offset_ms
         self.slow_to_fast_compensation_frames = slow_to_fast_compensation_frames
         self.fast_to_slow_compensation_frames = fast_to_slow_compensation_frames
+        self.fast_to_fast2x_compensation_frames = fast_to_fast2x_compensation_frames
+        self.fast2x_to_fast_compensation_frames = fast2x_to_fast_compensation_frames
         self.rate_transition_cooldown_frames = rate_transition_cooldown_frames
         self._sampler_interval_ms = sampler_interval_ms
         self.debug = debug
@@ -70,6 +203,55 @@ class RegionStateTimer:
         # 划火柴热键配置：{"select_operator": {"key": "r", "compensation_ms": 2.0}, ...}
         self._matchstick_hotkeys = matchstick_hotkeys or {}
         self._matchstick_ignore_until: Optional[float] = None
+
+        # 倍率模板匹配器
+        self._rate_matcher: Optional[_RateTemplateMatcher] = None
+        self._last_stable_rate_state: Optional[str] = None
+        if use_template_matching:
+            tmpl_dir = Path(rate_template_dir) if rate_template_dir else Path(__file__).parent / "resource"
+            self._rate_matcher = _RateTemplateMatcher(
+                str(tmpl_dir / constants.RATE_TEMPLATE_FAST_NAME),
+                str(tmpl_dir / constants.RATE_TEMPLATE_SLOW_NAME),
+                fast2x_path=str(tmpl_dir / constants.RATE_TEMPLATE_FAST2X_NAME),
+                debug=self.debug,
+            )
+            if self.debug:
+                print(f"[区域计时] 模板匹配可用: {self._rate_matcher.available}")
+
+        # 费用条同步修正（支持普通 / 危机合约 tag）
+        self._cost_bar_sync: Optional[CostBarSyncType] = None
+        self._cost_bar_maxed = False
+        self._cost_bar_last_sync_time: Optional[float] = None
+        self._cost_bar_sync_warmed_up = False
+        self._cost_bar_sync_corrected_while_paused = False
+        if cost_bar_calibration_name:
+            self._cost_bar_sync = CostBarSyncCC(
+                self.capture,
+                calibration_name=cost_bar_calibration_name,
+                debug=self.debug,
+            )
+            if self.debug:
+                print(f"[区域计时] 费用条同步使用合约模式: {cost_bar_calibration_name}")
+        else:
+            self._cost_bar_sync = CostBarSyncCC(
+                self.capture,
+                calibration_name="normal",
+                calibration_schedule=[
+                    (0.0, "normal_early"),
+                    (10000.0, "normal"),
+                ],
+                debug=self.debug,
+            )
+            if self.debug:
+                print("[区域计时] 费用条同步使用普通模式校准表（前 10s 区分 29 帧）")
+
+        # 加载费用条 MAX 模板，满费后停止修正
+        self._cost_max_template: Optional[np.ndarray] = None
+        self._cost_max_mask: Optional[np.ndarray] = None
+        cost_max_path = Path(__file__).parent / "resource" / constants.COST_MAX_TEMPLATE_NAME
+        self._cost_max_template, self._cost_max_mask = self._load_template_with_mask(str(cost_max_path))
+        if self._cost_max_template is None and self.debug:
+            print(f"[区域计时] 无法加载费用条 MAX 模板: {cost_max_path}")
 
         # 加载 COST 模板，用于费用条启动检测
         self._cost_template: Optional[np.ndarray] = None
@@ -92,7 +274,7 @@ class RegionStateTimer:
         self._use_cost_detection = False
 
         # 区域 B 高频采样线程
-        self._rate_samples: List[Tuple[float, Optional[int], float]] = []
+        self._rate_samples: List[Tuple[float, Optional[int], float, Optional[str]]] = []
         self._sampler_thread: Optional[threading.Thread] = None
         self._sampler_stop_event = threading.Event()
 
@@ -120,7 +302,70 @@ class RegionStateTimer:
         except Exception:
             return None
 
+    @staticmethod
+    def _load_template_with_mask(
+        path: str,
+        mask_threshold: int = constants.RATE_TEMPLATE_MASK_THRESHOLD,
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """加载模板并生成前景掩膜（BGRA 按 alpha+亮度，BGR/灰度按亮度阈值）。"""
+        try:
+            img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+            if img is None:
+                return None, None
+            if img.ndim == 3 and img.shape[2] == 4:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+                alpha = img[:, :, 3]
+                mask = (
+                    (alpha > mask_threshold) & (gray > mask_threshold)
+                ).astype(np.uint8) * 255
+            elif img.ndim == 3:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                _, mask = cv2.threshold(gray, mask_threshold, 255, cv2.THRESH_BINARY)
+            else:
+                gray = img
+                _, mask = cv2.threshold(gray, mask_threshold, 255, cv2.THRESH_BINARY)
+            return gray, mask
+        except Exception:
+            return None, None
+
+    def _capture_rate_state(self) -> Tuple[Optional[int], Optional[float], Optional[str]]:
+        """截取区域 B 并返回 (白像素数量, 当前倍率, 状态)。
+
+        当模板匹配可用时优先使用模板匹配；否则回退到白像素阈值逻辑。
+        """
+        try:
+            img = self.capture.capture_roi(*self.roi_b)
+            if img.size == 0:
+                return None, None, None
+            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+            white = int(np.sum(gray > self.threshold))
+
+            if self._rate_matcher is not None and self._rate_matcher.available:
+                score_fast, score_slow, score_fast2x, mean_diff, state = self._rate_matcher.match(gray)
+                self._last_stable_rate_state = state
+                if state == _RateTemplateMatcher.STATE_FAST:
+                    rate = 1.0
+                elif state == _RateTemplateMatcher.STATE_FAST2X:
+                    rate = self.fast2x_rate
+                else:
+                    rate = self.slow_rate
+                return white, rate, state
+
+            # 回退：白像素阈值（无法区分 1x/2x，统一视为 1x）
+            rate: Optional[float] = None
+            if white > self.b_fast_threshold:
+                rate = 1.0
+            elif white < self.b_slow_threshold:
+                rate = self.slow_rate
+            state = "fast" if rate == 1.0 else "slow" if rate == self.slow_rate else None
+            return white, rate, state
+        except Exception as e:
+            if self.debug:
+                print(f"[区域计时] ROI {self.roi_b} 截取失败: {e}")
+            return None, None, None
+
     def _white_count(self, roi: Tuple[int, int, int, int]) -> Optional[int]:
+        """旧版兼容：返回 ROI 白像素计数。"""
         try:
             img = self.capture.capture_roi(*roi)
             if img.size == 0:
@@ -132,9 +377,10 @@ class RegionStateTimer:
                 print(f"[区域计时] ROI {roi} 截取失败: {e}")
             return None
 
-    def _capture_rate_state(self) -> Optional[int]:
-        """截取区域 B 并返回白像素计数，用于判断倍率。"""
-        return self._white_count(self.roi_b)
+    def _sample_rate_state(self) -> Optional[int]:
+        """旧版兼容：仅返回白像素计数。"""
+        count_b, _, _ = self._capture_rate_state()
+        return count_b
 
     def _on_pause_key(self):
         """暂停键被按下时切换计时器状态并记录时间戳。"""
@@ -187,14 +433,24 @@ class RegionStateTimer:
             pass
 
     def _on_matchstick_key(self, name: str, compensation_ms: float):
-        """划火柴热键触发：时间补偿 + 短暂屏蔽 P 键检测。"""
+        """划火柴热键触发：按当前倍率决定时间补偿，并短暂屏蔽 P 键检测。"""
         now = time.perf_counter()
+        _, latest_rate, _ = self._get_latest_sample()
+        # 未识别到倍率时默认按子弹时间（0.2x）处理；补偿值基于 0.2x 校准，
+        # 其他倍率按相对比例放大。
+        effective_rate = latest_rate if latest_rate is not None else self.slow_rate
+        rate_factor = effective_rate / self.slow_rate
+        adjusted_compensation = compensation_ms * rate_factor
         # 300ms 保护期，期间忽略 P 键（覆盖划火柴操作本身对暂停键的按下）
         with self._lock:
             self._matchstick_ignore_until = now + 0.3
-            self._scaled_elapsed_ms += compensation_ms
+            self._scaled_elapsed_ms += adjusted_compensation
         if self.debug:
-            print(f"[区域计时] 划火柴 {name} 触发，补偿 +{compensation_ms}ms，P 键保护 300ms")
+            print(
+                f"[区域计时] 划火柴 {name} 触发，当前倍率={effective_rate}, "
+                f"补偿 +{adjusted_compensation:.1f}ms (基准 {compensation_ms:.1f}ms × {rate_factor:.1f}), "
+                f"P 键保护 300ms"
+            )
 
     def adjust(self, offset_ms: float):
         """手动补偿/调整已累积的计时（如脚本子进程需要同步推进时间）。"""
@@ -238,15 +494,11 @@ class RegionStateTimer:
         """以 _sampler_interval_ms 为间隔持续采样区域 B 倍率。"""
         while not self._sampler_stop_event.is_set():
             t0 = time.perf_counter()
-            count_b = self._capture_rate_state()
-            rate = self._rate
-            if count_b is not None:
-                if count_b > self.b_fast_threshold:
-                    rate = 1.0
-                elif count_b < self.b_slow_threshold:
-                    rate = self.slow_rate
+            count_b, rate, state = self._capture_rate_state()
+            if rate is None:
+                rate = self._rate
             with self._lock:
-                self._rate_samples.append((t0, count_b, rate))
+                self._rate_samples.append((t0, count_b, rate, state))
                 # 只保留最近 200ms 样本，避免无限增长
                 cutoff = t0 - 0.2
                 self._rate_samples = [
@@ -257,24 +509,141 @@ class RegionStateTimer:
             if sleep_ms > 0:
                 time.sleep(sleep_ms / 1000.0)
 
-    def _get_latest_sample(self) -> Tuple[Optional[int], Optional[float]]:
-        """返回最近一次的 (count_b, rate)。"""
+    def _get_latest_sample(self) -> Tuple[Optional[int], Optional[float], Optional[str]]:
+        """返回最近一次的 (count_b, rate, state)。"""
         with self._lock:
             if not self._rate_samples:
-                return None, None
-            _, count_b, rate = self._rate_samples[-1]
-            return count_b, rate
+                return None, None, None
+            _, count_b, rate, state = self._rate_samples[-1]
+            return count_b, rate, state
 
     def _get_average_rate(self, start_time: float, end_time: float) -> Optional[float]:
         """返回 [start_time, end_time] 区间内样本的平均倍率。"""
         with self._lock:
             samples = [
-                rate for ts, _, rate in self._rate_samples
+                rate for ts, _, rate, _ in self._rate_samples
                 if start_time <= ts <= end_time
             ]
         if not samples:
             return None
         return sum(samples) / len(samples)
+
+    def _match_cost_max(self, roi_gray: np.ndarray) -> float:
+        """检测费用条 ROI 是否出现 MAX 字样。"""
+        tmpl = self._cost_max_template
+        mask = self._cost_max_mask
+        if (
+            tmpl is None
+            or roi_gray.shape[0] < tmpl.shape[0]
+            or roi_gray.shape[1] < tmpl.shape[1]
+        ):
+            return 0.0
+        try:
+            result = cv2.matchTemplate(
+                roi_gray, tmpl, cv2.TM_CCOEFF_NORMED, mask=mask
+            )
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            return float(max_val)
+        except Exception:
+            return 0.0
+
+    def _sync_with_cost_bar(self):
+        """用费用条帧号修正计时器，防止模板倍率检测的系统性漂移累积。
+
+        支持普通模式和危机合约 tag（通过 CostBarSync / CostBarSyncCC）。
+        检测到 MAX 字样后停止修正。
+        """
+        with self._lock:
+            if (
+                self._cost_bar_sync is None
+                or not self._started
+                or self._cost_bar_maxed
+            ):
+                return
+            paused = self._paused
+            # 运行期间随时修正；暂停时只在进入暂停后的第一次修正，
+            # 避免用户暂停查看时间后还被反复修改。
+            if paused and self._cost_bar_sync_corrected_while_paused:
+                return
+            if not paused:
+                self._cost_bar_sync_corrected_while_paused = False
+            now = time.perf_counter()
+            last = self._cost_bar_last_sync_time
+            if (
+                last is not None
+                and (now - last) * 1000.0 < constants.COST_BAR_SYNC_INTERVAL_MS
+            ):
+                return
+            self._cost_bar_last_sync_time = now
+
+        try:
+            roi_gray = self._cost_bar_sync.capture_roi_gray()
+            if roi_gray is None:
+                return
+
+            # 检测 MAX 字样，出现后本次战斗不再修正
+            if self._match_cost_max(roi_gray) >= constants.COST_MAX_MATCH_CONFIDENCE:
+                with self._lock:
+                    self._cost_bar_maxed = True
+                if self.debug:
+                    print("[区域计时] 费用条 MAX 检测，停止费用条同步修正")
+                return
+
+            count = int(np.sum(roi_gray > self._cost_bar_sync.threshold))
+            with self._lock:
+                elapsed = self._scaled_elapsed_ms
+            cost_frame = self._cost_bar_sync.current_frame(count, elapsed)
+            if cost_frame is None:
+                return
+            if not self._cost_bar_sync.is_match(count, cost_frame, elapsed):
+                return
+
+            cal = self._cost_bar_sync.get_calibration(elapsed)
+            if self.debug:
+                print(
+                    f"[区域计时] 费用条同步使用校准表: {cal.name}, "
+                    f"elapsed={elapsed:.1f}ms"
+                )
+            # 预热：启动补偿阶段以及费用条还在初始帧 0 时不修正，
+            # 等费用条真正开始走动（出现非 0 帧）后再启用同步。
+            if not self._cost_bar_sync_warmed_up:
+                if elapsed >= self.startup_offset_ms and cost_frame != 0:
+                    self._cost_bar_sync_warmed_up = True
+                    if self.debug:
+                        print("[区域计时] 费用条同步预热完成")
+                return
+
+            frame_duration = cal.frame_duration_ms
+            cycle_duration = cal.cycle_length * frame_duration
+            offset = self._cost_bar_sync.frame_offset_ms
+            adjusted = max(0.0, elapsed - offset)
+            cycle_index = int(adjusted / cycle_duration)
+            desired_phase = cost_frame * frame_duration
+            candidates = [
+                (cycle_index + i) * cycle_duration + desired_phase + offset
+                for i in (-1, 0, 1)
+            ]
+            corrected = min(candidates, key=lambda t: abs(t - elapsed))
+            diff = corrected - elapsed
+
+            if abs(diff) > constants.COST_BAR_SYNC_MAX_DIFF_MS:
+                return
+
+            with self._lock:
+                # 再次检查状态，避免同步期间被重置/MAX；暂停时仍允许修正一次
+                if not self._started or self._cost_bar_maxed:
+                    return
+                self._scaled_elapsed_ms = corrected
+                if self._paused:
+                    self._cost_bar_sync_corrected_while_paused = True
+            if self.debug:
+                print(
+                    f"[区域计时] 费用条修正 {diff:+.1f}ms "
+                    f"cost_frame={cost_frame} -> {corrected:.1f}ms"
+                )
+        except Exception as e:
+            if self.debug:
+                print(f"[区域计时] 费用条同步异常: {e}")
 
     def _unregister_hotkey(self):
         if self._keyboard_listener is not None:
@@ -356,14 +725,14 @@ class RegionStateTimer:
         self._last_tick_time = now
 
     def _wait_for_initial_state(self, timeout: float = 30.0, interval: float = 0.01):
-        print("[区域计时] 等待初始状态: 区域B>1200...")
+        print("[区域计时] 等待初始状态: 区域B为1.0x...")
         start = time.perf_counter()
         while time.perf_counter() - start < timeout:
-            count_b = self._capture_rate_state()
+            count_b, rate, state = self._capture_rate_state()
             if self.debug:
-                print(f"[区域计时] 等待中 B={count_b}")
-            if count_b is not None and count_b > self.b_fast_threshold:
-                print(f"[区域计时] 初始状态已满足 B={count_b}")
+                print(f"[区域计时] 等待中 B={count_b} rate={rate} state={state}")
+            if rate is not None and rate == 1.0:
+                print(f"[区域计时] 初始状态已满足 B={count_b} state={state}")
                 return True
             time.sleep(interval)
         print("[区域计时] 等待初始状态超时")
@@ -384,6 +753,10 @@ class RegionStateTimer:
         self._toggle_events = []
         self._last_toggle_time = None
         self._rate_samples = []
+        self._cost_bar_maxed = False
+        self._cost_bar_sync_warmed_up = False
+        self._cost_bar_sync_corrected_while_paused = False
+        self._cost_bar_last_sync_time = None
         self._use_cost_detection = (
             use_cost_detection and self._cost_template is not None
         )
@@ -394,6 +767,7 @@ class RegionStateTimer:
             self._cost_detector = CostBarStartDetector(
                 self.capture,
                 self._cost_template,
+                cost_bar_sync=self._cost_bar_sync,
                 debug=self.debug,
             )
             if self.debug:
@@ -439,7 +813,20 @@ class RegionStateTimer:
     def reset(self):
         with self._lock:
             self._scaled_elapsed_ms = 0.0
-        self._last_tick_time = time.perf_counter() if self._started and not self._paused else None
+            self._started = False
+            self._rate = 1.0
+            self._prev_rate = 1.0
+            self._rate_samples.clear()
+            self._rate_transition_cooldown = 0
+            self._use_cost_detection = False
+            self._cost_bar_maxed = False
+            self._cost_bar_sync_warmed_up = False
+            self._cost_bar_sync_corrected_while_paused = False
+            self._cost_bar_last_sync_time = None
+            self._toggle_events = [
+                ep for ep in self._toggle_events if ep[0] > time.perf_counter()
+            ]
+        self._last_tick_time = None
 
     def get_elapsed_ms(self) -> float:
         self._update_time()
@@ -488,28 +875,29 @@ class RegionStateTimer:
                 info["elapsed_ms"] = self._scaled_elapsed_ms
                 return info
 
-            count_b, _ = self._get_latest_sample()
+            count_b, rate, state = self._get_latest_sample()
             info["count_b"] = count_b
-            if count_b is not None and count_b > self.b_fast_threshold and not self._paused:
+            info["state"] = state
+            if (
+                rate is not None
+                and rate >= 1.0
+                and not self._paused
+            ):
                 self._started = True
                 self._prev_paused = self._paused
                 self._last_tick_time = time.perf_counter()
-                print(f"[区域计时] 启动计时 B={count_b}")
+                print(f"[区域计时] 启动计时 B={count_b} state={state} rate={rate}")
             info["elapsed_ms"] = self._scaled_elapsed_ms
             return info
 
         # 运行阶段：用采样线程的最近样本判断离散倍率，用区间平均倍率累加时间
-        latest_count_b, _ = self._get_latest_sample()
+        latest_count_b, latest_rate, latest_state = self._get_latest_sample()
         info["count_b"] = latest_count_b
+        info["state"] = latest_state
 
         # 保存旧倍率并计算本帧目标离散倍率
         self._prev_rate = self._rate
-        new_rate = self._rate
-        if latest_count_b is not None:
-            if latest_count_b > self.b_fast_threshold:
-                new_rate = 1.0
-            elif latest_count_b < self.b_slow_threshold:
-                new_rate = self.slow_rate
+        new_rate = latest_rate if latest_rate is not None else self._rate
 
         # 用本 tick 区间内的平均倍率累加游戏时间
         now = time.perf_counter()
@@ -519,14 +907,11 @@ class RegionStateTimer:
 
         self._update_time(current_rate=avg_rate)
 
+        # 费用条同步修正（普通/合约模式），满费 MAX 后自动停止
+        self._sync_with_cost_bar()
+
         # 区域 B 倍率判断（带迟滞，避免阈值附近反复切换导致重复补偿）
         if new_rate != self._rate:
-            # 经验补偿：检测本身存在滞后。
-            # 冷却期内允许倍率跟随实际状态，但不再重复补偿，
-            # 避免切换后几帧因 UI 渐变反复触发补偿。
-            # 仅在当前周期实际处于运行（或即将运行）时补偿。
-            # 使用 self._paused 而非捕获时的 current_paused，避免 tick 过程中发生
-            # 暂停事件后仍进行补偿。
             if not self._paused and self._rate_transition_cooldown == 0:
                 if new_rate == 1.0 and self._rate == self.slow_rate:
                     compensation = self.slow_to_fast_compensation_frames * self.frame_ms
@@ -548,9 +933,29 @@ class RegionStateTimer:
                             f"[区域计时] 1.0x->0.2x 补偿 {compensation:.1f}ms "
                             f"(-{self.fast_to_slow_compensation_frames} 帧)"
                         )
+                elif new_rate == self.fast2x_rate and self._rate == 1.0:
+                    compensation = self.fast_to_fast2x_compensation_frames * self.frame_ms
+                    with self._lock:
+                        self._scaled_elapsed_ms += compensation
+                    self._rate_transition_cooldown = self.rate_transition_cooldown_frames
+                    if self.debug:
+                        print(
+                            f"[区域计时] 1.0x->2.0x 补偿 +{compensation:.1f}ms "
+                            f"({self.fast_to_fast2x_compensation_frames} 帧)"
+                        )
+                elif new_rate == 1.0 and self._rate == self.fast2x_rate:
+                    compensation = -self.fast2x_to_fast_compensation_frames * self.frame_ms
+                    with self._lock:
+                        self._scaled_elapsed_ms += compensation
+                    self._rate_transition_cooldown = self.rate_transition_cooldown_frames
+                    if self.debug:
+                        print(
+                            f"[区域计时] 2.0x->1.0x 补偿 {compensation:.1f}ms "
+                            f"(-{self.fast2x_to_fast_compensation_frames} 帧)"
+                        )
             self._rate = new_rate
             if self.debug:
-                print(f"[区域计时] 倍率切换为 {new_rate} B={latest_count_b}")
+                print(f"[区域计时] 倍率切换为 {new_rate} B={latest_count_b} state={latest_state}")
 
         if self._rate_transition_cooldown > 0:
             self._rate_transition_cooldown -= 1

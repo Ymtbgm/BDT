@@ -36,7 +36,7 @@ def main():
 
         if keyboard.is_pressed("f9"):
             if state == "running":
-                timer.start()
+                timer.start(use_cost_detection=True)
                 timer.manual_pause()
                 print("\n[工具] 计时已重置并暂停，按 F9 继续...")
             else:
@@ -66,7 +66,7 @@ def main():
             if info.get("started"):
                 print(
                     f"\r时间: {info['elapsed_ms']:7.1f}ms | "
-                    f"A={info['count_a']} B={info['count_b']} | "
+                    f"B={info['count_b']} state={info.get('state', '?')} | "
                     f"倍率={info['rate']} | 暂停={info['paused']}",
                     end="",
                     flush=True,

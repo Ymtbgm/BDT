@@ -22,13 +22,27 @@ REGION_B_SLOW_THRESHOLD: int = 1000  # < 此值视为 0.2x
 
 # 游戏内倍率
 FAST_RATE: float = 1.0
+FAST2X_RATE: float = 2.0
 SLOW_RATE: float = 0.2
 
 # 帧时间与补偿
 FRAME_MS: float = 33.333
 STARTUP_OFFSET_MS: float = 50.0
-SLOW_TO_FAST_COMPENSATION_FRAMES: float = 1.6
-FAST_TO_SLOW_COMPENSATION_FRAMES: float = 0.4
+
+# 区域 B 模板匹配
+RATE_TEMPLATE_FAST_NAME: str = "1X.png"
+RATE_TEMPLATE_FAST2X_NAME: str = "2X.png"
+RATE_TEMPLATE_SLOW_NAME: str = "0.2X.png"
+RATE_TEMPLATE_MATCH_CONFIDENCE: float = 0.85
+RATE_TEMPLATE_TRANSITION_CONFIDENCE: float = 0.70
+# 模板掩膜阈值：alpha > 此值或灰度 > 此值视为图标前景
+RATE_TEMPLATE_MASK_THRESHOLD: int = 128
+# 帧间平均差分超过此值认为 UI 仍在动画/淡化，辅助判定过渡态
+RATE_TEMPLATE_DIFF_THRESHOLD: float = 3.0
+
+# 经验补偿：默认设为 0，过渡态按目标倍率累加后通常不需要额外补偿
+SLOW_TO_FAST_COMPENSATION_FRAMES: float = 0.0
+FAST_TO_SLOW_COMPENSATION_FRAMES: float = 0.0
 RATE_TRANSITION_COOLDOWN_FRAMES: int = 5
 
 # 键盘事件防抖与保护期
@@ -48,13 +62,19 @@ COST_BAR_ROI_RATIOS: Tuple[float, float, float, float] = (
     (1284 - 1278) / 1600,  # h
 )
 
-COST_BAR_THRESHOLD: int = 200
+COST_BAR_THRESHOLD: int = 150
 COST_BAR_STEP_PIXELS: float = 45.0
 COST_BAR_FULL_PIXELS: int = 1302
 COST_BAR_FRAME_OFFSET_MS: float = 0.0
 
 # 帧同步容差：白像素数量与期望值的允许偏差（步长的 70%）
 COST_BAR_TOLERANCE_RATIO: float = 0.7
+
+# 费用条同步修正
+COST_BAR_SYNC_INTERVAL_MS: float = 100.0
+COST_BAR_SYNC_MAX_DIFF_MS: float = 500.0
+COST_MAX_TEMPLATE_NAME: str = "cost_max.png"
+COST_MAX_MATCH_CONFIDENCE: float = 0.85
 
 # ============================================================
 # 部署栏 OCR (OperatorPool)
@@ -88,6 +108,10 @@ ADVANCE_FRAME_MS: float = 33.0
 # wait_until 最后自旋等待阈值
 WAIT_SPIN_THRESHOLD_MS: int = 5
 
+# 二倍速下 wait_until 目标提前量（压缩时间 ms），用于抵消暂停键延迟导致的触发偏晚
+# 设为 0 表示默认不提前；若实测二倍速仍偏晚，可适量调大
+TWOX_EARLY_TRIGGER_MS: int = 0
+
 # ============================================================
 # 键位与热键 (action.py 默认配置)
 # ============================================================
@@ -95,6 +119,7 @@ WAIT_SPIN_THRESHOLD_MS: int = 5
 DEFAULT_PAUSE_KEY: str = "p"
 DEFAULT_SKILL_KEY: str = "e"
 DEFAULT_RETREAT_KEY: str = "q"
+DEFAULT_SPEED_KEY: str = "f"
 
 DEFAULT_MATCHSTICK_HOTKEYS: Dict[str, str] = {
     "select_operator": "r",
