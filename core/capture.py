@@ -102,6 +102,16 @@ class WindowCapture:
         )
         return img
 
+    def capture_mss(self) -> np.ndarray:
+        """使用 mss 截取窗口客户区（前台截图，获取当前实际显示像素）。"""
+        if self.monitor is None:
+            self._update_window_rect()
+        screenshot = self.sct.grab(self.monitor)
+        img = np.frombuffer(screenshot.raw, dtype=np.uint8).reshape(
+            (screenshot.height, screenshot.width, 4)
+        )
+        return img
+
     def capture(self) -> np.ndarray:
         if self.backend == "printwindow":
             try:

@@ -3,6 +3,7 @@ import shutil
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QFileDialog,
+    QGroupBox,
 )
 
 
@@ -12,11 +13,16 @@ class ResourceTab(QWidget):
         self.main_window = main_window
         self._build_ui()
 
+    def _project_root(self) -> str:
+        return self.main_window._project_root()
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel("levels.json 资源更新"))
-        layout.addWidget(
+        # ---- levels.json 资源更新 ----
+        levels_group = QGroupBox("levels.json 资源更新")
+        levels_layout = QVBoxLayout(levels_group)
+        levels_layout.addWidget(
             QLabel("选择新的 levels.json 文件，点击更新后将会覆盖 core/resource/levels.json")
         )
 
@@ -27,14 +33,15 @@ class ResourceTab(QWidget):
         self.main_window.btn_resource_browse = QPushButton("浏览")
         self.main_window.btn_resource_browse.clicked.connect(self._browse_resource)
         file_layout.addWidget(self.main_window.btn_resource_browse)
-        layout.addLayout(file_layout)
+        levels_layout.addLayout(file_layout)
 
         self.main_window.btn_update_resource = QPushButton("更新资源")
         self.main_window.btn_update_resource.clicked.connect(self._update_resource)
-        layout.addWidget(self.main_window.btn_update_resource)
+        levels_layout.addWidget(self.main_window.btn_update_resource)
 
         self.main_window.resource_status = QLabel("状态: 未更新")
-        layout.addWidget(self.main_window.resource_status)
+        levels_layout.addWidget(self.main_window.resource_status)
+        layout.addWidget(levels_group)
 
         layout.addStretch()
 
@@ -48,7 +55,7 @@ class ResourceTab(QWidget):
         if not src:
             QMessageBox.warning(self.main_window, "警告", "请先选择 levels.json 文件")
             return
-        dst = os.path.join(self.main_window._project_root(), "core", "resource", "levels.json")
+        dst = os.path.join(self._project_root(), "core", "resource", "levels.json")
         try:
             shutil.copy2(src, dst)
             self.main_window.resource_status.setText(f"状态: 更新成功 -> {dst}")
@@ -56,3 +63,4 @@ class ResourceTab(QWidget):
         except Exception as e:
             self.main_window.resource_status.setText(f"状态: 更新失败 - {e}")
             QMessageBox.critical(self.main_window, "错误", f"更新失败: {e}")
+

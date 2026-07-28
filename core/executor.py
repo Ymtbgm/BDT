@@ -1,11 +1,12 @@
 import asyncio
-import os
-import time
 from typing import Optional, Dict, List, Tuple, Union
 
 import cv2
 import numpy as np
 from pydantic import BaseModel
+
+import core.constants as constants
+import core.cost_recognition as cost_recognition
 
 from core.capture import WindowCapture
 from core.grid_mapper import GridMapper
@@ -14,8 +15,7 @@ from core.ocr_engine import OCREngine
 from core.operator_pool import OperatorPool
 from core.cost_bar_sync import CostBarSync
 from core.cost_bar_sync_cc import CostBarSyncCC
-import core.constants as constants
-from models.script_schema import ScriptModel, ActionType, OperatorAction
+from models.script_schema import ScriptModel, ActionType, OperatorAction, SummonBinding
 
 
 CostBarSyncType = Union[CostBarSync, CostBarSyncCC]
@@ -44,6 +44,7 @@ class ScriptExecutor:
         self._costs_recognized = False
         self._cost_bar_maxed = False
         self._speed2x_ref_ms: Optional[int] = None
+        self._summon_bindings_map: Dict[str, str] = {}
 
     def set_cost_sync(self, cost_sync: Optional[CostBarSyncType]):
         self.cost_sync = cost_sync
@@ -178,6 +179,12 @@ class ScriptExecutor:
         top = self.capture.monitor.get("top", 0)
         self.pool.set_window_offset(left, top)
 
+        # 加载召唤物绑定关系，供 RETREAT 时清理对应召唤物
+        self._summon_bindings_map = {
+            b.operator_name: b.summon_name
+            for b in (script.summon_bindings or [])
+        }
+
     def verify_stage_name(self) -> bool:
         if not self.script or not self.script.stage_name:
             return True
@@ -229,7 +236,10 @@ class ScriptExecutor:
         if self._costs_recognized:
             return
         self._costs_recognized = True
-        costs = self._recognize_operator_costs()
+        costs, manual_support = self._recognize_operator_costs()
+        if manual_support and self.pool is not None:
+            self.borrow_support = True
+            self.pool.set_support_count(1)
         if costs:
             self.pool.set_operator_costs(costs)
             if self.debug:
@@ -237,167 +247,20 @@ class ScriptExecutor:
         elif self.debug:
             print("[部署栏OCR] 首个动作暂停时未识别到费用，使用初始序号排序")
 
-    def _recognize_operator_costs(self) -> Dict[str, int]:
-        """按干员格子精确裁剪并 OCR 识别费用，返回 {operator_name: cost}。
-
-        识别失败或数量不匹配时返回空字典，调用方应回退到按初始序号排序。
-        """
+    def _recognize_operator_costs(self) -> Tuple[Dict[str, int], bool]:
+        """按干员格子精确裁剪并 OCR 识别费用，返回 (costs, manual_support_detected)。"""
         if not self.script or not self.script.operators:
-            return {}
-        w, h = self.capture.get_window_size()
-        left = self.capture.monitor.get("left", 0)
-        top = self.capture.monitor.get("top", 0)
-        ratios = constants.DEPLOY_BAR_COST_ROI_RATIOS
-        y = int(h * ratios[1]) + top
-        rh = int(h * ratios[3])
-
-        support_count = 1 if getattr(self, "borrow_support", False) else 0
-        operators_to_recognize = self.script.operators[:-support_count] if support_count > 0 else self.script.operators
-        num_operators = len(self.script.operators)
-        num_items = len(self.script.items) if self.script.items else 0
-        total = num_operators + num_items
-        cell_w = w / 12 if total <= 12 else w / total
-
-        session_id = int(time.time() * 1000)
-        session_dir = os.path.join("debug", "operator_cost_ocr", str(session_id))
-        if self.debug:
-            os.makedirs(session_dir, exist_ok=True)
-            print(
-                f"[部署栏OCR] 会话={session_id} 窗口=({w}x{h}) 格子宽={cell_w:.1f} "
-                f"干员数={num_operators} 道具数={num_items} 助战={support_count}"
-            )
-
-        mapping = {}
-        for i, name in enumerate(operators_to_recognize):
-            bar_index = total - 1 - i
-            cx = w - cell_w * (bar_index + 0.5)
-            x = int(cx) + left
-            rw = 53
-            try:
-                img = self.capture.capture_roi(x, y, rw, rh)
-            except Exception as e:
-                if self.debug:
-                    print(f"[部署栏OCR] {name}: 截取 ROI 失败: {e}")
-                continue
-
-            raw_path = os.path.join(session_dir, f"{name}_raw.png") if self.debug else None
-            fixed_path = os.path.join(session_dir, f"{name}_fixed.png") if self.debug else None
-            inv_path = os.path.join(session_dir, f"{name}_inv.png") if self.debug else None
-
-            fixed_img = self._preprocess_cost_image(img)
-            inv_img = self._preprocess_cost_image_inv(img)
-
-            # 固定阈值二值化 → 反色二值化
-            fixed_result = self._extract_cost_with_conf(
-                self.ocr.recognize(fixed_img, min_confidence=0.5), min_conf=0.5
-            )
-            inv_result = self._extract_cost_with_conf(
-                self.ocr.recognize(inv_img, min_confidence=0.5), min_conf=0.5
-            )
-
-            if self.debug:
-                os.makedirs(session_dir, exist_ok=True)
-                cv2.imwrite(raw_path, img)
-                cv2.imwrite(fixed_path, fixed_img)
-                cv2.imwrite(inv_path, inv_img)
-                fixed_str = f"{fixed_result[0]}({fixed_result[1]:.2f})" if fixed_result else "失败"
-                inv_str = f"{inv_result[0]}({inv_result[1]:.2f})" if inv_result else "失败"
-
-            chosen = None
-            chosen_source = None
-            if fixed_result:
-                chosen = fixed_result[0]
-                chosen_source = "固定阈值"
-            elif inv_result:
-                chosen = inv_result[0]
-                chosen_source = "反色"
-
-            if chosen is not None:
-                mapping[name] = chosen
-                if self.debug:
-                    print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → {chosen} ({chosen_source})")
-            elif self.debug:
-                print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → 失败")
-
-        expected = len(operators_to_recognize)
-        if len(mapping) < expected:
-            if self.debug:
-                print(
-                    f"[部署栏OCR] 仅识别到 {len(mapping)}/{expected} 个费用，"
-                    f"回退到初始序号排序"
-                )
-            return {}
-
-        # 自动检测手动借用的助战干员：仅直接开始作战时启用。
-        # 直接开始作战未勾选 borrow_support，但用户可能手动借用。
-        # 若最右侧干员费用低于其左侧第一名干员，则判定最右侧为助战，固定在最右不参与排序。
-        if (
-            self.direct_start
-            and support_count == 0
-            and len(self.script.operators) >= 2
-        ):
-            rightmost_name = self.script.operators[-1]
-            left_neighbor_name = self.script.operators[-2]
-            if rightmost_name in mapping and left_neighbor_name in mapping:
-                if mapping[rightmost_name] < mapping[left_neighbor_name]:
-                    self.borrow_support = True
-                    if self.pool is not None:
-                        self.pool.set_support_count(1)
-                    if self.debug:
-                        print(
-                            f"[部署栏OCR] 检测到手动助战: {rightmost_name}"
-                            f"({mapping[rightmost_name]}) < {left_neighbor_name}"
-                            f"({mapping[left_neighbor_name]}), 已固定为最右"
-                        )
-
-        if self.debug:
-            print(f"[部署栏OCR] 识别费用: {mapping}")
-        return mapping
-
-    def _extract_cost_with_conf(self, results: list, min_conf: float = 0.5) -> Optional[Tuple[int, float]]:
-        """从 OCR 结果中提取置信度最高的纯数字费用，无有效结果返回 None。"""
-        best_cost = None
-        best_conf = 0.0
-        for bbox, (text, conf) in results:
-            if conf < min_conf:
-                continue
-            digits = "".join(c for c in text if c.isdigit())
-            if not digits:
-                continue
-            try:
-                cost = int(digits)
-            except ValueError:
-                continue
-            if conf > best_conf:
-                best_conf = conf
-                best_cost = cost
-        return (best_cost, best_conf) if best_cost is not None else None
-
-    def _extract_cost_from_results(self, results: list) -> Optional[int]:
-        """从单格 OCR 结果中提取最可信的纯数字费用，无有效结果返回 None。"""
-        res = self._extract_cost_with_conf(results, min_conf=constants.DEPLOY_BAR_COST_CONFIDENCE)
-        return res[0] if res else None
-
-    def _preprocess_cost_image(self, img: np.ndarray) -> np.ndarray:
-        """预处理费用数字截图：放大后固定阈值二值化并轻微闭运算，强化白字。"""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        _, binary = cv2.threshold(
-            gray,
-            constants.DEPLOY_BAR_COST_WHITE_THRESHOLD,
-            255,
-            cv2.THRESH_BINARY,
+            return {}, False
+        item_names = [it.name for it in (self.script.items or [])]
+        return cost_recognition.recognize_operator_costs(
+            capture=self.capture,
+            ocr=self.ocr,
+            operators=self.script.operators,
+            items=item_names,
+            support_count=1 if getattr(self, "borrow_support", False) else 0,
+            direct_start=self.direct_start,
+            debug=self.debug,
         )
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-        return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
-
-    def _preprocess_cost_image_inv(self, img: np.ndarray) -> np.ndarray:
-        """反色二值化（黑字白底），作为固定阈值失败时的回退。"""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
 
     async def _advance_frame_in_bullet_time(self):
         """进入子弹时间后调用 p_and_esc_click 推进一帧，再退出子弹时间。
@@ -551,6 +414,13 @@ class ScriptExecutor:
             self.action.press_key(self.action.retreat_key())
             if action.operator_name and not action.is_object:
                 self.pool.retreat(action.operator_name)
+                # 若该干员绑定了召唤物，同步从部署区/已部署列表中清理
+                bound_summon = self._summon_bindings_map.get(action.operator_name)
+                if bound_summon:
+                    self.pool.retreat(bound_summon)
+                    self.pool.deactivate_summon(bound_summon)
+                    if self.debug:
+                        print(f"[执行] 干员 {action.operator_name} 撤退，清理绑定召唤物 {bound_summon}")
 
         elif action.action == ActionType.SKILL:
             grid = action.grid
@@ -606,6 +476,32 @@ class ScriptExecutor:
             self.pool.activate_summon(action.operator_name, charges)
             if self.debug:
                 print(f"[执行] 召唤物 {action.operator_name} (费用 {summon.cost}) 加入部署栏 x{charges}")
+
+        elif action.action == ActionType.REMOVE_SUMMON:
+            if not action.operator_name:
+                return
+            summon = next((s for s in self.script.summons if s.name == action.operator_name), None)
+            if summon is None:
+                raise RuntimeError(f"脚本中未定义召唤物: {action.operator_name}")
+            self.pool.deactivate_summon(action.operator_name)
+            if self.debug:
+                print(f"[执行] 召唤物 {action.operator_name} 从部署栏移除")
+
+        elif action.action == ActionType.RESET_SUMMON:
+            if not action.operator_name:
+                return
+            summon = next((s for s in self.script.summons if s.name == action.operator_name), None)
+            if summon is None:
+                raise RuntimeError(f"脚本中未定义召唤物: {action.operator_name}")
+            target_count = 1
+            if action.grid and len(action.grid) > 0:
+                target_count = max(0, int(action.grid[0]))
+            # 强制修正部署栏数量：已部署召唤物视为强制返回并合并为指定数量
+            if action.operator_name in self.pool._deployed:
+                self.pool.retreat(action.operator_name)
+            self.pool.set_summon_charges(action.operator_name, target_count)
+            if self.debug:
+                print(f"[执行] 召唤物 {action.operator_name} 强制修正数量为 {target_count}")
 
         elif action.action == ActionType.SPEED_UP:
             self.action.press_key(self.action.speed_key())

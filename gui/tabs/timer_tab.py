@@ -123,6 +123,7 @@ class TimerTab(QWidget):
         self.main_window._timer_overlay = TimerOverlay(
             on_pause_clicked=self._toggle_timer_pause,
             on_reset_clicked=self._reset_region_timer,
+            debug=self.main_window.chk_timer_debug.isChecked(),
         )
         self.main_window._timer_overlay.show()
         self.main_window.showMinimized()

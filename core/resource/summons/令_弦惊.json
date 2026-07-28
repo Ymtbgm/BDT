@@ -1,0 +1,12 @@
+{
+  "name": "令_弦惊",
+  "cost": 18,
+  "summon_class": "B",
+  "initial_count": 8,
+  "gain_on_skill_end": true,
+  "skill_duration_ms": 30000,
+  "skill_gain_count": 1,
+  "max_charges": 8,
+  "aliases": ["令"],
+  "is_default_alias": true
+}

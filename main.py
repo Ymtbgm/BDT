@@ -55,7 +55,7 @@ import action
 
 
 class Runner:
-    def __init__(self, debug: bool = False, cost_tag: Optional[str] = None):
+    def __init__(self, debug: bool = False, cost_tag: Optional[str] = None, ocr_engine: Optional[str] = None):
         import time
         self.debug = debug
         self.cost_tag = cost_tag
@@ -70,14 +70,13 @@ class Runner:
 
         self.capture = WindowCapture(backend="mss")
 
-        # engine: None 表示让 PaddleOCR 自行选择（默认 paddle_static，性能最好）
-        # 如果当前环境 paddle_static 崩溃，会自动回退到 transformers
+        # engine: None 表示自动选择（优先 PaddleX ONNX Runtime，回退 PaddleOCR）
         # model_size: "mobile" 模型体积小、速度快；"server" 精度高但慢
         t0 = time.perf_counter()
         self.ocr = OCREngine(
             use_gpu=False,
             debug=debug,
-            engine=None,
+            engine=ocr_engine,
             model_size="mobile",
         )
         t1 = time.perf_counter()
@@ -483,7 +482,7 @@ class Runner:
 
 async def main():
     if len(sys.argv) < 2:
-        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--speed2x] [--cost-tag {normal|cc_25|cc_50|cc_75}] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY] [--speed-key KEY]")
+        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--speed2x] [--cost-tag {normal|cc_25|cc_50|cc_75}] [--ocr-engine {auto|paddlex_onnx|transformers|paddle}] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY] [--speed-key KEY]")
         sys.exit(1)
 
     loop_mode = "--loop" in sys.argv
@@ -536,13 +535,16 @@ async def main():
         print(f"错误：--cost-tag 必须是 {list_calibrations()} 之一")
         sys.exit(1)
 
+    ocr_engine_choice = _arg_str("--ocr-engine", "auto")
+    ocr_engine = None if ocr_engine_choice == "auto" else ocr_engine_choice
+
     pause_key = _arg_str("--pause-key", "p")
     skill_key = _arg_str("--skill-key", "e")
     retreat_key = _arg_str("--retreat-key", "q")
     speed_key = _arg_str("--speed-key", "f")
     action.configure_keys(pause=pause_key, skill=skill_key, retreat=retreat_key, speed=speed_key)
 
-    runner = Runner(debug=debug_mode, cost_tag=cost_tag)
+    runner = Runner(debug=debug_mode, cost_tag=cost_tag, ocr_engine=ocr_engine)
     try:
         await runner.run_script(
             sys.argv[1],

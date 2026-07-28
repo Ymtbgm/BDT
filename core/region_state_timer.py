@@ -278,12 +278,16 @@ class RegionStateTimer:
         self._sampler_thread: Optional[threading.Thread] = None
         self._sampler_stop_event = threading.Event()
 
+        # 费用条同步线程：避免同步耗时阻塞 tick
+        self._cost_sync_thread: Optional[threading.Thread] = None
+        self._cost_sync_stop_event = threading.Event()
+
         # 100ms 防抖，避免误触或快速连按导致重复切换
         self._last_toggle_time: Optional[float] = None
 
         # 暂停键切换事件队列，元素为 (time.perf_counter(), paused)
         self._toggle_events: List[Tuple[float, bool]] = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._keyboard_listener: Optional[Listener] = None
 
     @staticmethod
@@ -490,24 +494,61 @@ class RegionStateTimer:
             self._sampler_thread.join(timeout=0.5)
             self._sampler_thread = None
 
+    def _start_cost_sync(self):
+        """启动费用条同步线程。"""
+        self._stop_cost_sync()
+        self._cost_sync_stop_event.clear()
+        self._cost_sync_thread = threading.Thread(
+            target=self._cost_sync_loop, daemon=True
+        )
+        self._cost_sync_thread.start()
+
+    def _stop_cost_sync(self):
+        """停止费用条同步线程。"""
+        if self._cost_sync_thread is not None:
+            self._cost_sync_stop_event.set()
+            self._cost_sync_thread.join(timeout=0.5)
+            self._cost_sync_thread = None
+
+    def _cost_sync_loop(self):
+        """周期性执行费用条同步修正，避免阻塞 tick。"""
+        while not self._cost_sync_stop_event.is_set():
+            try:
+                t0 = time.perf_counter()
+                self._sync_with_cost_bar()
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                sleep_ms = max(0.0, constants.COST_BAR_SYNC_INTERVAL_MS - elapsed_ms)
+                if sleep_ms > 0:
+                    time.sleep(sleep_ms / 1000.0)
+            except Exception as e:
+                if self.debug:
+                    print(f"[区域计时] 费用条同步线程异常: {e}")
+                time.sleep(constants.COST_BAR_SYNC_INTERVAL_MS / 1000.0)
+
     def _rate_sampler_loop(self):
         """以 _sampler_interval_ms 为间隔持续采样区域 B 倍率。"""
         while not self._sampler_stop_event.is_set():
-            t0 = time.perf_counter()
-            count_b, rate, state = self._capture_rate_state()
-            if rate is None:
-                rate = self._rate
-            with self._lock:
-                self._rate_samples.append((t0, count_b, rate, state))
-                # 只保留最近 200ms 样本，避免无限增长
-                cutoff = t0 - 0.2
-                self._rate_samples = [
-                    s for s in self._rate_samples if s[0] > cutoff
-                ]
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sleep_ms = max(0.0, self._sampler_interval_ms - elapsed_ms)
-            if sleep_ms > 0:
-                time.sleep(sleep_ms / 1000.0)
+            try:
+                t0 = time.perf_counter()
+                count_b, rate, state = self._capture_rate_state()
+                if rate is None:
+                    rate = self._rate
+                sample = (t0, count_b, rate, state)
+                with self._lock:
+                    self._rate_samples.append(sample)
+                    # 只保留最近 200ms 样本，避免无限增长
+                    cutoff = t0 - 0.2
+                    self._rate_samples = [
+                        s for s in self._rate_samples if s[0] > cutoff
+                    ]
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                sleep_ms = max(0.0, self._sampler_interval_ms - elapsed_ms)
+                if sleep_ms > 0:
+                    time.sleep(sleep_ms / 1000.0)
+            except Exception as e:
+                if self.debug:
+                    print(f"[区域计时] 倍率采样线程异常: {e}")
+                time.sleep(self._sampler_interval_ms / 1000.0)
 
     def _get_latest_sample(self) -> Tuple[Optional[int], Optional[float], Optional[str]]:
         """返回最近一次的 (count_b, rate, state)。"""
@@ -560,13 +601,8 @@ class RegionStateTimer:
                 or self._cost_bar_maxed
             ):
                 return
-            paused = self._paused
-            # 运行期间随时修正；暂停时只在进入暂停后的第一次修正，
-            # 避免用户暂停查看时间后还被反复修改。
-            if paused and self._cost_bar_sync_corrected_while_paused:
-                return
-            if not paused:
-                self._cost_bar_sync_corrected_while_paused = False
+            # 运行期间和暂停期间都持续修正：暂停后游戏真正停下来可能需要几帧，
+            # 只修正一次容易把“暂停前一帧”误锁进去，持续修正可在稳定后拉回到正确帧。
             now = time.perf_counter()
             last = self._cost_bar_last_sync_time
             if (
@@ -630,12 +666,10 @@ class RegionStateTimer:
                 return
 
             with self._lock:
-                # 再次检查状态，避免同步期间被重置/MAX；暂停时仍允许修正一次
+                # 再次检查状态，避免同步期间被重置/MAX
                 if not self._started or self._cost_bar_maxed:
                     return
                 self._scaled_elapsed_ms = corrected
-                if self._paused:
-                    self._cost_bar_sync_corrected_while_paused = True
             if self.debug:
                 print(
                     f"[区域计时] 费用条修正 {diff:+.1f}ms "
@@ -763,6 +797,7 @@ class RegionStateTimer:
         self._cost_detector = None
         self._register_hotkey()
         self._start_rate_sampler()
+        self._start_cost_sync()
         if self._use_cost_detection:
             self._cost_detector = CostBarStartDetector(
                 self.capture,
@@ -778,6 +813,7 @@ class RegionStateTimer:
     def stop(self):
         self._running = False
         self._stop_rate_sampler()
+        self._stop_cost_sync()
         self._unregister_hotkey()
 
     def pause(self):
@@ -843,127 +879,139 @@ class RegionStateTimer:
         if not self._running:
             return {"running": False}
 
-        with self._lock:
-            current_paused = self._paused
+        t_start = time.perf_counter()
+        try:
+            with self._lock:
+                current_paused = self._paused
 
-        info = {
-            "running": True,
-            "started": self._started,
-            "paused": current_paused,
-            "rate": self._rate,
-            "state_a": None,
-            "count_a": None,
-            "count_b": None,
-        }
+            info = {
+                "running": True,
+                "started": self._started,
+                "paused": current_paused,
+                "rate": self._rate,
+                "state_a": None,
+                "count_a": None,
+                "count_b": None,
+            }
 
-        if not self._started:
-            if self._use_cost_detection and self._cost_detector is not None:
-                offset_ms = self._cost_detector.tick()
-                if offset_ms is not None and not self._paused:
+            if not self._started:
+                if self._use_cost_detection and self._cost_detector is not None:
+                    offset_ms = self._cost_detector.tick()
+                    if offset_ms is not None and not self._paused:
+                        self._started = True
+                        self._prev_paused = self._paused
+                        self._last_tick_time = time.perf_counter()
+                        self._scaled_elapsed_ms = offset_ms
+                        if self.debug:
+                            print(
+                                f"[区域计时] 费用条启动检测完成，开始计时，"
+                                f"补偿 {offset_ms:.1f}ms，当前时间 {self._scaled_elapsed_ms:.1f}ms"
+                            )
+                    else:
+                        if self.debug:
+                            print(f"[区域计时] 费用条启动检测中: {self._cost_detector.state}")
+                    info["elapsed_ms"] = self._scaled_elapsed_ms
+                    return info
+
+                count_b, rate, state = self._get_latest_sample()
+                info["count_b"] = count_b
+                info["state"] = state
+                if (
+                    rate is not None
+                    and rate >= 1.0
+                    and not self._paused
+                ):
                     self._started = True
                     self._prev_paused = self._paused
                     self._last_tick_time = time.perf_counter()
-                    self._scaled_elapsed_ms = offset_ms
-                    if self.debug:
-                        print(
-                            f"[区域计时] 费用条启动检测完成，开始计时，"
-                            f"补偿 {offset_ms:.1f}ms，当前时间 {self._scaled_elapsed_ms:.1f}ms"
-                        )
-                else:
-                    if self.debug:
-                        print(f"[区域计时] 费用条启动检测中: {self._cost_detector.state}")
+                    print(f"[区域计时] 启动计时 B={count_b} state={state} rate={rate}")
                 info["elapsed_ms"] = self._scaled_elapsed_ms
                 return info
 
-            count_b, rate, state = self._get_latest_sample()
-            info["count_b"] = count_b
-            info["state"] = state
-            if (
-                rate is not None
-                and rate >= 1.0
-                and not self._paused
-            ):
-                self._started = True
-                self._prev_paused = self._paused
-                self._last_tick_time = time.perf_counter()
-                print(f"[区域计时] 启动计时 B={count_b} state={state} rate={rate}")
+            # 运行阶段：用采样线程的最近样本判断离散倍率，用区间平均倍率累加时间
+            latest_count_b, latest_rate, latest_state = self._get_latest_sample()
+            info["count_b"] = latest_count_b
+            info["state"] = latest_state
+
+            # 保存旧倍率并计算本帧目标离散倍率
+            self._prev_rate = self._rate
+            new_rate = latest_rate if latest_rate is not None else self._rate
+
+            # 用本 tick 区间内的平均倍率累加游戏时间
+            now = time.perf_counter()
+            avg_rate = self._get_average_rate(self._last_tick_time, now) if self._last_tick_time is not None else None
+            if avg_rate is None:
+                avg_rate = new_rate
+
+            self._update_time(current_rate=avg_rate)
+
+            # 区域 B 倍率判断（带迟滞，避免阈值附近反复切换导致重复补偿）
+            if new_rate != self._rate:
+                if not self._paused and self._rate_transition_cooldown == 0:
+                    if new_rate == 1.0 and self._rate == self.slow_rate:
+                        compensation = self.slow_to_fast_compensation_frames * self.frame_ms
+                        with self._lock:
+                            self._scaled_elapsed_ms += compensation
+                        self._rate_transition_cooldown = self.rate_transition_cooldown_frames
+                        if self.debug:
+                            print(
+                                f"[区域计时] 0.2x->1.0x 补偿 +{compensation:.1f}ms "
+                                f"({self.slow_to_fast_compensation_frames} 帧)"
+                            )
+                    elif new_rate == self.slow_rate and self._rate == 1.0:
+                        compensation = -self.fast_to_slow_compensation_frames * self.frame_ms
+                        with self._lock:
+                            self._scaled_elapsed_ms += compensation
+                        self._rate_transition_cooldown = self.rate_transition_cooldown_frames
+                        if self.debug:
+                            print(
+                                f"[区域计时] 1.0x->0.2x 补偿 {compensation:.1f}ms "
+                                f"(-{self.fast_to_slow_compensation_frames} 帧)"
+                            )
+                    elif new_rate == self.fast2x_rate and self._rate == 1.0:
+                        compensation = self.fast_to_fast2x_compensation_frames * self.frame_ms
+                        with self._lock:
+                            self._scaled_elapsed_ms += compensation
+                        self._rate_transition_cooldown = self.rate_transition_cooldown_frames
+                        if self.debug:
+                            print(
+                                f"[区域计时] 1.0x->2.0x 补偿 +{compensation:.1f}ms "
+                                f"({self.fast_to_fast2x_compensation_frames} 帧)"
+                            )
+                    elif new_rate == 1.0 and self._rate == self.fast2x_rate:
+                        compensation = -self.fast2x_to_fast_compensation_frames * self.frame_ms
+                        with self._lock:
+                            self._scaled_elapsed_ms += compensation
+                        self._rate_transition_cooldown = self.rate_transition_cooldown_frames
+                        if self.debug:
+                            print(
+                                f"[区域计时] 2.0x->1.0x 补偿 {compensation:.1f}ms "
+                                f"(-{self.fast2x_to_fast_compensation_frames} 帧)"
+                            )
+                self._rate = new_rate
+                if self.debug:
+                    print(f"[区域计时] 倍率切换为 {new_rate} B={latest_count_b} state={latest_state}")
+
+            if self._rate_transition_cooldown > 0:
+                self._rate_transition_cooldown -= 1
+
             info["elapsed_ms"] = self._scaled_elapsed_ms
+            info["paused"] = self._paused
+            info["rate"] = self._rate
             return info
-
-        # 运行阶段：用采样线程的最近样本判断离散倍率，用区间平均倍率累加时间
-        latest_count_b, latest_rate, latest_state = self._get_latest_sample()
-        info["count_b"] = latest_count_b
-        info["state"] = latest_state
-
-        # 保存旧倍率并计算本帧目标离散倍率
-        self._prev_rate = self._rate
-        new_rate = latest_rate if latest_rate is not None else self._rate
-
-        # 用本 tick 区间内的平均倍率累加游戏时间
-        now = time.perf_counter()
-        avg_rate = self._get_average_rate(self._last_tick_time, now) if self._last_tick_time is not None else None
-        if avg_rate is None:
-            avg_rate = new_rate
-
-        self._update_time(current_rate=avg_rate)
-
-        # 费用条同步修正（普通/合约模式），满费 MAX 后自动停止
-        self._sync_with_cost_bar()
-
-        # 区域 B 倍率判断（带迟滞，避免阈值附近反复切换导致重复补偿）
-        if new_rate != self._rate:
-            if not self._paused and self._rate_transition_cooldown == 0:
-                if new_rate == 1.0 and self._rate == self.slow_rate:
-                    compensation = self.slow_to_fast_compensation_frames * self.frame_ms
-                    with self._lock:
-                        self._scaled_elapsed_ms += compensation
-                    self._rate_transition_cooldown = self.rate_transition_cooldown_frames
-                    if self.debug:
-                        print(
-                            f"[区域计时] 0.2x->1.0x 补偿 +{compensation:.1f}ms "
-                            f"({self.slow_to_fast_compensation_frames} 帧)"
-                        )
-                elif new_rate == self.slow_rate and self._rate == 1.0:
-                    compensation = -self.fast_to_slow_compensation_frames * self.frame_ms
-                    with self._lock:
-                        self._scaled_elapsed_ms += compensation
-                    self._rate_transition_cooldown = self.rate_transition_cooldown_frames
-                    if self.debug:
-                        print(
-                            f"[区域计时] 1.0x->0.2x 补偿 {compensation:.1f}ms "
-                            f"(-{self.fast_to_slow_compensation_frames} 帧)"
-                        )
-                elif new_rate == self.fast2x_rate and self._rate == 1.0:
-                    compensation = self.fast_to_fast2x_compensation_frames * self.frame_ms
-                    with self._lock:
-                        self._scaled_elapsed_ms += compensation
-                    self._rate_transition_cooldown = self.rate_transition_cooldown_frames
-                    if self.debug:
-                        print(
-                            f"[区域计时] 1.0x->2.0x 补偿 +{compensation:.1f}ms "
-                            f"({self.fast_to_fast2x_compensation_frames} 帧)"
-                        )
-                elif new_rate == 1.0 and self._rate == self.fast2x_rate:
-                    compensation = -self.fast2x_to_fast_compensation_frames * self.frame_ms
-                    with self._lock:
-                        self._scaled_elapsed_ms += compensation
-                    self._rate_transition_cooldown = self.rate_transition_cooldown_frames
-                    if self.debug:
-                        print(
-                            f"[区域计时] 2.0x->1.0x 补偿 {compensation:.1f}ms "
-                            f"(-{self.fast2x_to_fast_compensation_frames} 帧)"
-                        )
-            self._rate = new_rate
+        except Exception as e:
             if self.debug:
-                print(f"[区域计时] 倍率切换为 {new_rate} B={latest_count_b} state={latest_state}")
-
-        if self._rate_transition_cooldown > 0:
-            self._rate_transition_cooldown -= 1
-
-        info["elapsed_ms"] = self._scaled_elapsed_ms
-        info["paused"] = self._paused
-        info["rate"] = self._rate
-        return info
+                print(f"[区域计时] tick 异常: {e}")
+            return {
+                "running": True,
+                "error": str(e),
+                "elapsed_ms": self._scaled_elapsed_ms,
+            }
+        finally:
+            if self.debug:
+                dur_ms = (time.perf_counter() - t_start) * 1000.0
+                if dur_ms > 50.0:
+                    print(f"[区域计时] tick 耗时 {dur_ms:.1f}ms")
 
     def run_loop(self, stop_check=None):
         """阻塞式运行检测循环，直到 stop() 或 stop_check 返回 True。"""

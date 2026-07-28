@@ -66,6 +66,8 @@ class MainWindow(QMainWindow):
     combo_support_skill: QComboBox
     combo_support_module: QComboBox
     combo_pause_key: QComboBox
+    combo_ocr_engine: QComboBox
+    combo_avatar_model: QComboBox
     line_skill_key: QLineEdit
     line_retreat_key: QLineEdit
     line_speed_key: QLineEdit
@@ -149,15 +151,26 @@ class MainWindow(QMainWindow):
     rec_grid_rows: QSpinBox
     rec_grid_cols: QSpinBox
     rec_chk_debug: QCheckBox
-    rec_op_list: QListWidget
+    rec_chk_debug_cost_bar: QCheckBox
+    rec_chk_debug_resolver: QCheckBox
+    rec_chk_debug_screenshot: QCheckBox
+    rec_chk_support_op: QCheckBox
+    rec_initial_operator_count: QSpinBox
+    rec_initial_item_count: QSpinBox
+    rec_op_table: QTableWidget
     rec_op_input: QLineEdit
+    rec_op_cost_input: QSpinBox
     rec_op_add_btn: QPushButton
     rec_op_remove_btn: QPushButton
+    rec_op_up_btn: QPushButton
+    rec_op_down_btn: QPushButton
     rec_item_table: QTableWidget
     rec_item_input: QLineEdit
     rec_item_charges_input: QSpinBox
     rec_item_add_btn: QPushButton
     rec_item_remove_btn: QPushButton
+    rec_item_up_btn: QPushButton
+    rec_item_down_btn: QPushButton
     btn_rec_start: QPushButton
     btn_rec_stop: QPushButton
     btn_rec_save: QPushButton
@@ -179,7 +192,8 @@ class MainWindow(QMainWindow):
         _icon_candidates.append(os.path.join(os.getcwd(), "core", "resource", "Icon.ico"))
         _icon_path = next((p for p in _icon_candidates if os.path.exists(p)), _icon_candidates[0])
         self.setWindowIcon(QIcon(_icon_path))
-        self.resize(1200, 800)
+        self.resize(1600, 900)
+        self.setMinimumWidth(1280)
         self.script = ScriptModel(grid_rows=7, grid_cols=9)
         self._applying_edit = False
         self._selecting = False
@@ -276,12 +290,26 @@ class MainWindow(QMainWindow):
             "challenge_mode": self.chk_challenge_mode.isChecked(),
             "speed2x": self.chk_speed2x.isChecked(),
             "cost_tag": self.combo_cost_tag.currentData() or "",
+            "ocr_engine": self.combo_ocr_engine.currentData() or "auto",
+            "avatar_model": self.combo_avatar_model.currentData() or "resnet18",
             "rec_debug": self.rec_chk_debug.isChecked(),
+            "rec_debug_cost_bar": self.rec_chk_debug_cost_bar.isChecked(),
+            "rec_debug_resolver": self.rec_chk_debug_resolver.isChecked(),
+            "rec_debug_screenshot": self.rec_chk_debug_screenshot.isChecked(),
+            "rec_support_op": self.rec_chk_support_op.isChecked(),
             "rec_stage_name": self.rec_stage_name.text(),
             "rec_stage_code": self.rec_stage_code.text(),
             "rec_grid_rows": self.rec_grid_rows.value(),
             "rec_grid_cols": self.rec_grid_cols.value(),
-            "rec_operators": [self.rec_op_list.item(i).text() for i in range(self.rec_op_list.count())],
+            "rec_initial_operator_count": self.rec_initial_operator_count.value(),
+            "rec_initial_item_count": self.rec_initial_item_count.value(),
+            "rec_operators": [
+                {
+                    "name": self.rec_op_table.item(r, 0).text(),
+                    "cost": int(self.rec_op_table.item(r, 1).text()) if self.rec_op_table.item(r, 1) and self.rec_op_table.item(r, 1).text().isdigit() else None,
+                }
+                for r in range(self.rec_op_table.rowCount())
+            ],
             "rec_items": [
                 {"name": self.rec_item_table.item(r, 0).text(), "charges": int(self.rec_item_table.item(r, 1).text())}
                 for r in range(self.rec_item_table.rowCount())
@@ -334,15 +362,41 @@ class MainWindow(QMainWindow):
             idx = self.combo_cost_tag.findData(cost_tag)
             if idx >= 0:
                 self.combo_cost_tag.setCurrentIndex(idx)
+        ocr_engine = config.get("ocr_engine", "auto")
+        idx = self.combo_ocr_engine.findData(ocr_engine)
+        if idx >= 0:
+            self.combo_ocr_engine.setCurrentIndex(idx)
+        avatar_model = config.get("avatar_model", "resnet18")
+        idx = self.combo_avatar_model.findData(avatar_model)
+        if idx >= 0:
+            self.combo_avatar_model.setCurrentIndex(idx)
         self.rec_chk_debug.setChecked(config.get("rec_debug", False))
+        self.rec_chk_debug_cost_bar.setChecked(config.get("rec_debug_cost_bar", False))
+        self.rec_chk_debug_resolver.setChecked(config.get("rec_debug_resolver", False))
+        self.rec_chk_debug_screenshot.setChecked(config.get("rec_debug_screenshot", False))
+        self.rec_chk_support_op.setChecked(config.get("rec_support_op", False))
         self.rec_stage_name.setText(config.get("rec_stage_name", ""))
         self.rec_stage_code.setText(config.get("rec_stage_code", ""))
         self.rec_grid_rows.setValue(config.get("rec_grid_rows", 7))
         self.rec_grid_cols.setValue(config.get("rec_grid_cols", 9))
-        self.rec_op_list.clear()
+        self.rec_initial_operator_count.setValue(config.get("rec_initial_operator_count", 12))
+        self.rec_initial_item_count.setValue(config.get("rec_initial_item_count", 0))
+        self.rec_op_table.setRowCount(0)
         for op in config.get("rec_operators", []):
-            if op:
-                self.rec_op_list.addItem(op)
+            name = ""
+            cost = None
+            if isinstance(op, dict):
+                name = op.get("name", "")
+                cost = op.get("cost")
+            elif isinstance(op, str):
+                name = op
+            if not name:
+                continue
+            row = self.rec_op_table.rowCount()
+            self.rec_op_table.insertRow(row)
+            self.rec_op_table.setItem(row, 0, QTableWidgetItem(name))
+            cost_text = str(cost) if isinstance(cost, int) and cost > 0 else ""
+            self.rec_op_table.setItem(row, 1, QTableWidgetItem(cost_text))
         self.rec_item_table.setRowCount(0)
         for it in config.get("rec_items", []):
             row = self.rec_item_table.rowCount()

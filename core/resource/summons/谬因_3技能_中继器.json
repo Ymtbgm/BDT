@@ -1,0 +1,25 @@
+{
+  "name": "谬因_3技能_中继器",
+  "cost": 3,
+  "summon_class": "A",
+  "initial_count": 1,
+  "max_return_time_ms": 35000,
+  "return_count": 1,
+  "skill_lock_enabled": true,
+  "skill_extra_charges": 3,
+  "skill_end_reset_count": 1,
+  "skill_state_match_enabled": true,
+  "skill_state_roi_offset_x": -35,
+  "skill_state_roi_offset_y": -240,
+  "skill_state_roi_width": 75,
+  "skill_state_roi_height": 75,
+  "skill_state_active_threshold": 0.8,
+
+  "skill_state_inactive_threshold": 0.7,
+  "skill_state_consecutive_frames": 5,
+  "skill_end_by_state_match": true,
+  "aliases": [
+    "谬因"
+  ],
+  "is_default_alias": true
+}

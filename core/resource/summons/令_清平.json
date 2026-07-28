@@ -1,0 +1,12 @@
+{
+  "name": "令_清平",
+  "cost": 9,
+  "summon_class": "B",
+  "initial_count": 8,
+  "periodic_gain_count": 1,
+  "gain_on_skill_start": true,
+  "skill_gain_count": 1,
+  "max_charges": 8,
+  "aliases": ["令"],
+  "is_default_alias": false
+}

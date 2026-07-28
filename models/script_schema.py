@@ -12,6 +12,8 @@ class ActionType(str, Enum):
     PAUSE = "pause"
     ADD_ITEM = "add_item"  # 在部署区新增额外道具（如击杀奖励装置）
     ADD_SUMMON = "add_summon"  # 在部署区新增特殊召唤物（按费用插入干员区域）
+    REMOVE_SUMMON = "remove_summon"  # 从部署区移除特殊召唤物（如干员撤退带走）
+    RESET_SUMMON = "reset_summon"  # 强制修正部署栏中特殊召唤物数量（非用户操作，生命周期事件）
 
 
 class OperatorAction(BaseModel):
@@ -28,6 +30,12 @@ class SummonInfo(BaseModel):
     cost: int = Field(..., description="部署费用，用于在部署栏中按费用排序定位")
 
 
+class SummonBinding(BaseModel):
+    operator_name: str = Field(..., description="绑定干员名称")
+    summon_name: str = Field(..., description="绑定召唤物名称")
+    initial_count: int = Field(default=1, description="干员部署后初始进入部署栏的召唤物数量")
+
+
 class ItemInfo(BaseModel):
     name: str = Field(..., description="道具名称")
     charges: int = Field(..., description="可使用次数")
@@ -42,6 +50,10 @@ class ScriptModel(BaseModel):
     operators: List[str] = Field(default_factory=list, description="初始携带干员列表，按位置顺序")
     items: List[ItemInfo] = Field(default_factory=list, description="关卡特殊部署物（道具），优先排列在部署栏最右侧")
     summons: List[SummonInfo] = Field(default_factory=list, description="特殊召唤物（如无人机、召唤物等），按费用插入干员区域")
+    summon_bindings: List[SummonBinding] = Field(
+        default_factory=list,
+        description="干员与召唤物的绑定关系，执行器在干员撤退时据此清理对应召唤物",
+    )
     actions: List[OperatorAction] = Field(default_factory=list, description="时间轴操作序列")
 
     def sort_actions(self):

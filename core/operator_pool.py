@@ -79,7 +79,7 @@ class OperatorPool:
         if total == 0:
             return {}
         w, h = self.window_width, self.window_height
-        bar_y = int(h * 1480 / 1600)
+        bar_y = int(h * 1500 / 1600)
         cell_w = w / 12 if total <= 12 else w / total
         positions = {}
         for i in range(total):
@@ -236,6 +236,31 @@ class OperatorPool:
         """获取部署栏指定索引（0 为最右侧）的像素坐标。"""
         return self._bar_positions.get(index)
 
+    def get_bar_count(self) -> int:
+        """返回当前部署栏总槽位数（道具 + 干员/召唤物）。"""
+        return len(self._bar_positions)
+
+    def get_name_at_bar_index(self, index: int) -> Optional[str]:
+        """根据部署栏索引（0 为最右侧）反查单位名称：依次判断道具、干员、召唤物。"""
+        item_count = len(self._available_items)
+        # 道具区域：索引 0..item_count-1
+        if 0 <= index < item_count:
+            return self._available_items[index]
+        # 干员/召唤物区域
+        left_units = self._get_left_units()
+        left_count = len(left_units)
+        if left_count == 0:
+            return None
+        offset = index - item_count
+        if 0 <= offset < left_count:
+            left_idx = (left_count - 1) - offset
+            return left_units[left_idx]
+        return None
+
+    def get_summon_charges(self, name: str) -> int:
+        """返回指定召唤物当前在部署栏中的剩余数量。"""
+        return self._summon_charges.get(name, 0)
+
     def register_summons(self, summons: List[SummonInfo]):
         """预注册脚本中定义的所有召唤物（此时还不在部署栏中）。"""
         self._summons = {s.name: s.cost for s in summons}
@@ -249,6 +274,23 @@ class OperatorPool:
         if charges <= 0:
             return
         self._summon_charges[name] = self._summon_charges.get(name, 0) + charges
+        self._recalc()
+
+    def set_summon_charges(self, name: str, charges: int):
+        """强制设置指定召唤物在部署栏中的剩余数量（用于技能结束等生命周期修正）。"""
+        if name not in self._summons:
+            raise ValueError(f"未注册的召唤物: {name}")
+        if charges <= 0:
+            self._summon_charges.pop(name, None)
+        else:
+            self._summon_charges[name] = charges
+        self._recalc()
+
+    def deactivate_summon(self, name: str):
+        """将指定召唤物从部署栏完全移除（数量归零），用于绑定干员撤退时同步移除召唤物。"""
+        if name not in self._summon_charges:
+            return
+        del self._summon_charges[name]
         self._recalc()
 
     def set_operator_costs(self, costs: Dict[str, int]):

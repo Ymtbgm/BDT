@@ -1,0 +1,12 @@
+{
+  "name": "鸿雪_打字机",
+  "cost": 5,
+  "summon_class": "A",
+  "initial_count": 1,
+  "max_return_time_ms": 25000,
+  "return_count": 1,
+  "aliases": [
+    "鸿雪"
+  ],
+  "is_default_alias": true
+}

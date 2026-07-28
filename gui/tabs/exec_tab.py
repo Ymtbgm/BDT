@@ -191,6 +191,15 @@ class ExecTab(QWidget):
         self.main_window.combo_cost_tag.addItem("费用回复降低50%", "cc_50")
         self.main_window.combo_cost_tag.addItem("费用回复降低75%", "cc_75")
         contract_layout.addWidget(self.main_window.combo_cost_tag)
+
+        contract_layout.addWidget(QLabel("OCR 引擎"))
+        self.main_window.combo_ocr_engine = QComboBox()
+        self.main_window.combo_ocr_engine.addItem("自动 (推荐 PaddleX ONNX)", "auto")
+        self.main_window.combo_ocr_engine.addItem("PaddleX ONNX Runtime", "paddlex_onnx")
+        self.main_window.combo_ocr_engine.addItem("PaddleOCR transformers", "transformers")
+        self.main_window.combo_ocr_engine.addItem("PaddleOCR paddle_static", "paddle")
+        contract_layout.addWidget(self.main_window.combo_ocr_engine)
+
         contract_layout.addStretch()
         layout.addWidget(contract_group)
 
@@ -446,6 +455,9 @@ class ExecTab(QWidget):
         cost_tag = self.main_window.combo_cost_tag.currentData()
         if cost_tag:
             args.extend(["--cost-tag", cost_tag])
+        ocr_engine = self.main_window.combo_ocr_engine.currentData()
+        if ocr_engine:
+            args.extend(["--ocr-engine", ocr_engine])
         if self.main_window.chk_borrow_support.isChecked():
             args.append("--borrow-support")
             args.extend([

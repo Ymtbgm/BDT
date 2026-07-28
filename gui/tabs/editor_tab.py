@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QAbstractItemView, QMessageBox,
     QFileDialog, QSpinBox, QComboBox, QListWidget,
-    QSizePolicy, QGroupBox, QCheckBox,
+    QSizePolicy, QGroupBox, QCheckBox, QHeaderView,
 )
 from PyQt6.QtCore import Qt
 
@@ -60,18 +60,25 @@ class EditorTab(QWidget):
         # 下方主区域
         content_layout = QHBoxLayout()
 
-        # 左侧：干员 / 道具 / 召唤物
-        lists_panel = QVBoxLayout()
-        lists_panel.addWidget(QLabel("部署区干员初始列表"))
+        # 左侧：干员 / 道具 / 召唤物 / 召唤物绑定（2x2 网格）
+        lists_panel = QGridLayout()
+        lists_panel.setSpacing(6)
+
+        # ---- 部署区干员初始列表 ----
+        op_widget = QWidget()
+        op_layout = QVBoxLayout(op_widget)
+        op_layout.setContentsMargins(0, 0, 0, 0)
+        op_layout.setSpacing(3)
+        op_layout.addWidget(QLabel("部署区干员初始列表"))
         self.main_window.operators_list = QListWidget()
-        self.main_window.operators_list.setMinimumHeight(160)
+        self.main_window.operators_list.setMinimumHeight(100)
         self.main_window.operators_list.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self.main_window.operators_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.main_window.operators_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.main_window.operators_list.model().rowsMoved.connect(self._sync_operators_to_script)
-        lists_panel.addWidget(self.main_window.operators_list)
+        op_layout.addWidget(self.main_window.operators_list)
         op_input_layout = QGridLayout()
         self.main_window.op_input = QLineEdit()
         self.main_window.op_input.setPlaceholderText("输入干员名...")
@@ -84,13 +91,19 @@ class EditorTab(QWidget):
         op_input_layout.addWidget(self.main_window.btn_remove_op, 1, 1)
         op_input_layout.addWidget(self.main_window.btn_up_op, 2, 0)
         op_input_layout.addWidget(self.main_window.btn_down_op, 2, 1)
-        lists_panel.addLayout(op_input_layout)
+        op_layout.addLayout(op_input_layout)
+        lists_panel.addWidget(op_widget, 0, 0)
 
-        lists_panel.addWidget(QLabel("部署区道具初始列表"))
+        # ---- 部署区道具初始列表 ----
+        item_widget = QWidget()
+        item_layout = QVBoxLayout(item_widget)
+        item_layout.setContentsMargins(0, 0, 0, 0)
+        item_layout.setSpacing(3)
+        item_layout.addWidget(QLabel("部署区道具初始列表"))
         self.main_window.items_table = QTableWidget()
         self.main_window.items_table.setColumnCount(2)
         self.main_window.items_table.setHorizontalHeaderLabels(["道具名", "次数"])
-        self.main_window.items_table.setMinimumHeight(100)
+        self.main_window.items_table.setMinimumHeight(80)
         self.main_window.items_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -105,7 +118,7 @@ class EditorTab(QWidget):
             QAbstractItemView.EditTrigger.SelectedClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
         )
-        lists_panel.addWidget(self.main_window.items_table)
+        item_layout.addWidget(self.main_window.items_table)
         item_input_layout = QHBoxLayout()
         self.main_window.item_input = QLineEdit()
         self.main_window.item_input.setPlaceholderText("道具名...")
@@ -114,7 +127,7 @@ class EditorTab(QWidget):
         self.main_window.item_charges_input.setValue(1)
         item_input_layout.addWidget(self.main_window.item_input)
         item_input_layout.addWidget(self.main_window.item_charges_input)
-        lists_panel.addLayout(item_input_layout)
+        item_layout.addLayout(item_input_layout)
 
         item_btn_layout = QGridLayout()
         self.main_window.btn_add_item = QPushButton("添加")
@@ -125,13 +138,20 @@ class EditorTab(QWidget):
         item_btn_layout.addWidget(self.main_window.btn_remove_item, 0, 1)
         item_btn_layout.addWidget(self.main_window.btn_up_item, 1, 0)
         item_btn_layout.addWidget(self.main_window.btn_down_item, 1, 1)
-        lists_panel.addLayout(item_btn_layout)
+        item_layout.addLayout(item_btn_layout)
+        lists_panel.addWidget(item_widget, 0, 1)
 
-        lists_panel.addWidget(QLabel("特殊召唤物"))
+        # ---- 特殊召唤物 ----
+        summon_widget = QWidget()
+        summon_layout = QVBoxLayout(summon_widget)
+        summon_layout.setContentsMargins(0, 0, 0, 0)
+        summon_layout.setSpacing(3)
+        summon_layout.addWidget(QLabel("特殊召唤物"))
         self.main_window.summons_table = QTableWidget()
         self.main_window.summons_table.setColumnCount(2)
         self.main_window.summons_table.setHorizontalHeaderLabels(["召唤物名", "费用"])
-        self.main_window.summons_table.setMinimumHeight(90)
+        self.main_window.summons_table.setMinimumHeight(60)
+        self.main_window.summons_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.main_window.summons_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -143,7 +163,7 @@ class EditorTab(QWidget):
             QAbstractItemView.EditTrigger.SelectedClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
         )
-        lists_panel.addWidget(self.main_window.summons_table)
+        summon_layout.addWidget(self.main_window.summons_table)
         summon_input_layout = QHBoxLayout()
         self.main_window.summon_input = QLineEdit()
         self.main_window.summon_input.setPlaceholderText("召唤物名...")
@@ -152,7 +172,7 @@ class EditorTab(QWidget):
         self.main_window.summon_cost_input.setValue(5)
         summon_input_layout.addWidget(self.main_window.summon_input)
         summon_input_layout.addWidget(self.main_window.summon_cost_input)
-        lists_panel.addLayout(summon_input_layout)
+        summon_layout.addLayout(summon_input_layout)
 
         summon_btn_layout = QGridLayout()
         self.main_window.btn_add_summon = QPushButton("添加")
@@ -163,13 +183,17 @@ class EditorTab(QWidget):
         summon_btn_layout.addWidget(self.main_window.btn_remove_summon, 0, 1)
         summon_btn_layout.addWidget(self.main_window.btn_up_summon, 1, 0)
         summon_btn_layout.addWidget(self.main_window.btn_down_summon, 1, 1)
-        lists_panel.addLayout(summon_btn_layout)
+        summon_layout.addLayout(summon_btn_layout)
+        lists_panel.addWidget(summon_widget, 1, 0)
 
-        lists_panel.addStretch()
+        lists_panel.setColumnStretch(0, 1)
+        lists_panel.setColumnStretch(1, 1)
+        lists_panel.setRowStretch(0, 1)
+        lists_panel.setRowStretch(1, 1)
 
         lists_widget = QWidget()
         lists_widget.setLayout(lists_panel)
-        lists_widget.setMaximumWidth(220)
+        lists_widget.setMaximumWidth(520)
         content_layout.addWidget(lists_widget, 0)
 
         # 中间：时间轴列表
@@ -229,6 +253,8 @@ class EditorTab(QWidget):
             ActionType.PAUSE: "暂停",
             ActionType.ADD_ITEM: "部署区新增道具",
             ActionType.ADD_SUMMON: "部署区新增召唤物",
+            ActionType.REMOVE_SUMMON: "部署区移除召唤物",
+            ActionType.RESET_SUMMON: "部署区修正召唤物",
         }
         self.main_window._action_labels_rev = {v: k for k, v in self.main_window._action_labels.items()}
 
@@ -272,7 +298,7 @@ class EditorTab(QWidget):
         summon_charges_layout.setContentsMargins(0, 0, 0, 0)
         summon_charges_layout.addWidget(QLabel("数量"))
         self.main_window.edit_summon_charges = QSpinBox()
-        self.main_window.edit_summon_charges.setRange(1, 999)
+        self.main_window.edit_summon_charges.setRange(0, 999)
         self.main_window.edit_summon_charges.setValue(1)
         summon_charges_layout.addWidget(self.main_window.edit_summon_charges)
         self.main_window.summon_charges_widget.hide()
@@ -592,8 +618,10 @@ class EditorTab(QWidget):
             self.main_window.action_table.setItem(i, 2, QTableWidgetItem(action_text))
             self.main_window.action_table.setItem(i, 3, QTableWidgetItem(act.operator_name or ""))
             grid = act.grid
-            if act.action == ActionType.ADD_SUMMON:
+            if act.action in (ActionType.ADD_SUMMON, ActionType.REMOVE_SUMMON):
                 grid_str = ""
+            elif act.action == ActionType.RESET_SUMMON:
+                grid_str = f"{act.grid[0]}" if act.grid else "1"
             elif (
                 grid is None
                 and act.action in (ActionType.RETREAT, ActionType.SKILL)
@@ -657,6 +685,13 @@ class EditorTab(QWidget):
                         self.main_window.edit_summon_charges.setValue(max(1, act.grid[0]))
                     else:
                         self.main_window.edit_summon_charges.setValue(1)
+                elif act.action == ActionType.REMOVE_SUMMON:
+                    pass
+                elif act.action == ActionType.RESET_SUMMON:
+                    if act.grid:
+                        self.main_window.edit_summon_charges.setValue(max(0, act.grid[0]))
+                    else:
+                        self.main_window.edit_summon_charges.setValue(1)
                 else:
                     grid = act.grid
                     if (
@@ -694,7 +729,7 @@ class EditorTab(QWidget):
         elif col == 3:
             act.operator_name = val or None
         elif col == 4:
-            if act.action == ActionType.ADD_SUMMON:
+            if act.action in (ActionType.ADD_SUMMON, ActionType.REMOVE_SUMMON, ActionType.RESET_SUMMON):
                 return
             val = self.main_window._normalize_grid_text(val)
             if val:
@@ -743,6 +778,22 @@ class EditorTab(QWidget):
             self.main_window.grid_input_widget.hide()
             self.main_window.item_index_widget.hide()
             self.main_window.summon_charges_widget.show()
+            self.main_window.edit_summon_charges.setRange(1, 999)
+            self.main_window.edit_dir.setEnabled(False)
+            self.main_window.combo_op.setEnabled(True)
+            self.main_window.chk_is_object.setEnabled(False)
+        elif act == ActionType.RESET_SUMMON:
+            self.main_window.grid_input_widget.hide()
+            self.main_window.item_index_widget.hide()
+            self.main_window.summon_charges_widget.show()
+            self.main_window.edit_summon_charges.setRange(0, 999)
+            self.main_window.edit_dir.setEnabled(False)
+            self.main_window.combo_op.setEnabled(True)
+            self.main_window.chk_is_object.setEnabled(False)
+        elif act == ActionType.REMOVE_SUMMON:
+            self.main_window.grid_input_widget.hide()
+            self.main_window.item_index_widget.hide()
+            self.main_window.summon_charges_widget.hide()
             self.main_window.edit_dir.setEnabled(False)
             self.main_window.combo_op.setEnabled(True)
             self.main_window.chk_is_object.setEnabled(False)
@@ -795,7 +846,17 @@ class EditorTab(QWidget):
             act.is_object = False
         elif act.action == ActionType.ADD_SUMMON:
             act.operator_name = self.main_window.combo_op.currentText() or None
-            act.grid = (self.main_window.edit_summon_charges.value(), 0)
+            act.grid = (max(1, self.main_window.edit_summon_charges.value()), 0)
+            act.direction = None
+            act.is_object = False
+        elif act.action == ActionType.RESET_SUMMON:
+            act.operator_name = self.main_window.combo_op.currentText() or None
+            act.grid = (max(0, self.main_window.edit_summon_charges.value()), 0)
+            act.direction = None
+            act.is_object = False
+        elif act.action == ActionType.REMOVE_SUMMON:
+            act.operator_name = self.main_window.combo_op.currentText() or None
+            act.grid = None
             act.direction = None
             act.is_object = False
         else:

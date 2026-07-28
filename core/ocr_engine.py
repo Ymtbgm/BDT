@@ -12,22 +12,51 @@ class OCREngine:
         debug: bool = False,
         engine: Optional[str] = None,
         model_size: str = "mobile",  # "mobile" 速度快，"server" 精度高
+        det_model_dir: Optional[str] = None,
+        rec_model_dir: Optional[str] = None,
     ):
         self.debug = debug
         self._model_size = model_size
         # engine=None 让 PaddleOCR 自行选择（默认 paddle_static，最快）
         # 如果当前环境 paddle_static 崩溃，可显式传入 engine="transformers"
+        # engine="paddlex_onnx" 使用 PaddleX create_pipeline(..., engine="onnxruntime")，
+        # 推理速度通常比 PaddleOCR transformers 后端更快。
+        # 当前环境下 Paddle 原生静态推理需要 CUDA，无 CUDA 时直接走 PaddleX ONNX Runtime。
+        if engine in ("paddle", "paddle_static"):
+            print(f"[OCR] 引擎 '{engine}' 在当前无 CUDA 环境下已映射为 PaddleX ONNX Runtime")
+            engine = "paddlex_onnx"
         self._user_engine = engine
+        self._det_model_dir = det_model_dir
+        self._rec_model_dir = rec_model_dir
         self._ocr = None
         self._backend = "unknown"
+        self.device = "unknown"
         self._init_ocr(use_gpu=use_gpu)
 
+    def _is_paddlex_backend(self) -> bool:
+        return self._backend.startswith("paddlex")
     def _init_ocr(self, use_gpu: bool = False):
-        # 彻底去除 GPU 支持，强制使用 CPU
-        use_gpu = False
         import os
         import time
         import logging
+
+        # 如果请求 GPU，先检查 CUDA 是否真的可用：
+        # - PaddleX ONNX Runtime 内部硬性要求 CUDAExecutionProvider
+        # - PaddleOCR transformers / paddle_static 也需要 CUDA 环境
+        # - OCR 后端均不支持 DirectML，因此只有 CUDA 可用时才保留 GPU 请求
+        if use_gpu:
+            try:
+                import onnxruntime as ort
+                available = set(ort.get_available_providers())
+                if "CUDAExecutionProvider" not in available:
+                    print(
+                        f"[OCR] 当前 OCR 后端需要 CUDA，"
+                        f"可用 providers={available}，降级到 CPU"
+                    )
+                    use_gpu = False
+            except Exception:
+                use_gpu = False
+
         # 在导入 paddle 前禁用 oneDNN 与新 PIR API，规避 PaddlePaddle 3.x 已知崩溃
         os.environ.setdefault("FLAGS_use_mkldnn", "0")
         os.environ.setdefault("FLAGS_enable_pir_api", "0")
@@ -39,6 +68,16 @@ class OCREngine:
             for _handler in _logger.handlers[:]:
                 _handler.setLevel(logging.WARNING)
 
+        # PaddleX ONNX Runtime 后端单独初始化
+        if self._user_engine in ("paddlex_onnx", "paddlex", "onnxruntime"):
+            self._init_paddlex_ocr(use_gpu=use_gpu)
+            return
+
+        # engine=None 时自动选择：优先尝试更快的 PaddleX ONNX Runtime，
+        # 不可用则回退到 PaddleOCR transformers / paddle_static
+        if self._user_engine is None and self._try_init_paddlex_ocr(use_gpu=use_gpu):
+            return
+
         t0 = time.perf_counter()
         from paddleocr import PaddleOCR
         t1 = time.perf_counter()
@@ -48,7 +87,7 @@ class OCREngine:
         if self._user_engine is not None:
             engines_to_try.append(self._user_engine)
         else:
-            # 优先尝试 transformers（mobile 模型体积小、加载快），
+            # PaddleX 不可用时，优先尝试 transformers（mobile 模型体积小），
             # 失败后再回退 paddle_static
             engines_to_try.extend(["transformers", None])
 
@@ -104,8 +143,9 @@ class OCREngine:
                         pass
                 t3 = time.perf_counter()
                 self._backend = f"paddleocr_{engine}" if engine else "paddleocr_paddle"
+                self.device = kwargs["device"]
                 # 该标记用于前端识别 OCR 已就绪并自动最小化窗口，不在界面上显示
-                print(f"[OCR] 初始化成功: {self._backend} (模型: {self._model_size}, 设备: {kwargs['device']})")
+                print(f"[OCR] 初始化成功: {self._backend} (模型: {self._model_size}, 设备: {self.device})")
                 if self.debug:
                     print(f"[DEBUG] PaddleOCR(engine={engine or 'paddle'}) 构造耗时: {(t3 - t2) * 1000:.1f}ms")
                 return
@@ -120,7 +160,82 @@ class OCREngine:
         # 全部失败才抛异常
         raise RuntimeError(f"PaddleOCR 初始化失败（已尝试 {engines_to_try}）: {last_error}")
 
+    def _try_init_paddlex_ocr(self, use_gpu: bool = False) -> bool:
+        """尝试初始化 PaddleX ONNX Runtime OCR；失败时返回 False 而不抛异常。"""
+        try:
+            self._init_paddlex_ocr(use_gpu=use_gpu)
+            return True
+        except Exception as e:
+            if self.debug:
+                print(f"[DEBUG] PaddleX ONNX Runtime OCR 自动初始化失败，将回退 PaddleOCR: {e}")
+            return False
+
+    def _init_paddlex_ocr(self, use_gpu: bool = False):
+        """使用 PaddleX create_pipeline 初始化 ONNX Runtime OCR 后端。"""
+        import time
+        from pathlib import Path
+        from paddlex import create_pipeline
+
+        t0 = time.perf_counter()
+        if self._model_size == "server":
+            det_model_name = "PP-OCRv5_server_det"
+            rec_model_name = "PP-OCRv5_server_rec"
+        else:
+            det_model_name = "PP-OCRv5_mobile_det"
+            rec_model_name = "PP-OCRv5_mobile_rec"
+
+        config = {
+            "pipeline_name": "OCR",
+            "text_type": "general",
+            "use_doc_preprocessor": False,
+            "use_textline_orientation": False,
+            "SubModules": {
+                "TextDetection": {
+                    "module_name": "text_detection",
+                    "model_name": det_model_name,
+                    "model_dir": self._det_model_dir,
+                    "limit_side_len": 64,
+                    "limit_type": "min",
+                    "max_side_limit": 8192,
+                    "thresh": 0.3,
+                    "box_thresh": 0.6,
+                    "unclip_ratio": 1.5,
+                },
+                "TextRecognition": {
+                    "module_name": "text_recognition",
+                    "model_name": rec_model_name,
+                    "model_dir": self._rec_model_dir,
+                    "batch_size": 6,
+                    "score_thresh": 0.0,
+                },
+            },
+        }
+
+        device = "gpu:0" if use_gpu else "cpu"
+        try:
+            self._ocr = create_pipeline(
+                "OCR",
+                config=config,
+                device=device,
+                engine="onnxruntime",
+            )
+            self._backend = "paddlex_onnx"
+            self.device = device
+            t1 = time.perf_counter()
+            print(
+                f"[OCR] 初始化成功: {self._backend} "
+                f"(det={det_model_name}, rec={rec_model_name}, "
+                f"device={device}, det_dir={self._det_model_dir}, rec_dir={self._rec_model_dir})"
+            )
+            if self.debug:
+                print(f"[DEBUG] PaddleX OCR 构造耗时: {(t1 - t0) * 1000:.1f}ms")
+        except Exception as e:
+            raise RuntimeError(f"PaddleX ONNX Runtime OCR 初始化失败: {e}") from e
+
     def recognize(self, image: np.ndarray, min_confidence: float = 0.6) -> list:
+        if self._is_paddlex_backend():
+            return self._recognize_paddlex(image, min_confidence)
+
         raw_result = self._ocr.predict(image)
         lines = []
         for res in raw_result:
@@ -142,6 +257,49 @@ class OCREngine:
                     lines.append([bbox, (text, conf)])
         if self.debug:
             self._save_debug(image, lines, raw_result)
+        return lines
+
+    def _recognize_paddlex(self, image: np.ndarray, min_confidence: float = 0.6) -> list:
+        """PaddleX ONNX Runtime 后端的结果解析，统一成 [bbox, (text, conf)] 格式。"""
+        # PaddleX OCR 的 det/rec 模型默认期望 3 通道 BGR 输入；
+        # 关键帧截图可能是 4 通道（BGRA），这里做转换并补齐小图尺寸。
+        if image.ndim == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        elif image.shape[2] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+        min_h, min_w = 64, 64
+        h, w = image.shape[:2]
+        if h < min_h or w < min_w:
+            pad_top = (min_h - h) // 2 if h < min_h else 0
+            pad_bottom = (min_h - h) - pad_top if h < min_h else 0
+            pad_left = (min_w - w) // 2 if w < min_w else 0
+            pad_right = (min_w - w) - pad_left if w < min_w else 0
+            image = cv2.copyMakeBorder(
+                image, pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_CONSTANT, value=(255, 255, 255),
+            )
+
+        result = list(
+            self._ocr.predict(
+                image,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+        )[0]
+        lines = []
+        polys = result.get("rec_polys", [])
+        texts = result.get("rec_texts", [])
+        scores = result.get("rec_scores", [])
+        for poly, text, conf in zip(polys, texts, scores):
+            if poly is None or not text:
+                continue
+            conf = float(conf)
+            if conf >= min_confidence:
+                lines.append([poly.tolist() if hasattr(poly, "tolist") else poly, (text, conf)])
+        if self.debug:
+            self._save_debug(image, lines, result)
         return lines
 
     def _save_debug(self, original: np.ndarray, lines: list, raw_result=None):

@@ -9,3 +9,5 @@ pydirectinput>=1.0
 keyboard>=0.13
 pynput>=1.7
 PyQt6>=6.5
+onnxruntime>=1.16
+onnx>=1.14
