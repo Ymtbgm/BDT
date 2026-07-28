@@ -61,6 +61,13 @@ desktop.ini
 # User-specific config (each developer/user may have different settings)
 config.json
 
+# Temporary/debug artifacts
+tmp_*.py
+tmp_export.onnx
+
+# Test datasets
+ResNet_test/
+
 # Claude
 .claude/
 
