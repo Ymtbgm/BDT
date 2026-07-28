@@ -16,6 +16,7 @@ from core.ocr_engine import OCREngine
 from core.recorder import ActionRecorder
 from core.region_state_timer import RegionStateTimer
 from gui.info_collection_overlay import InfoCollectionOverlay
+from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ItemInfo
 
 
@@ -87,29 +88,16 @@ class RecorderTab(QWidget):
         )
         param_layout.addWidget(self.main_window.rec_chk_support_op, 2, 2, 1, 2)
 
-        self.main_window.rec_chk_debug = QCheckBox("Debug 模式")
-        self.main_window.rec_chk_debug.setToolTip(
-            "录制器自身状态机、原始操作等日志。"
+        param_layout.addWidget(QLabel("调试选项:"), 4, 0)
+        self.main_window.combo_rec_debug = CheckedComboBox("未选择")
+        self.main_window.combo_rec_debug.add_item("录制器状态机", "recorder")
+        self.main_window.combo_rec_debug.add_item("费用条检测", "cost_bar")
+        self.main_window.combo_rec_debug.add_item("离线识别", "resolver")
+        self.main_window.combo_rec_debug.add_item("调试截图", "screenshot")
+        self.main_window.combo_rec_debug.setToolTip(
+            "勾选需要打印日志或保存截图的调试项，可多选。"
         )
-        param_layout.addWidget(self.main_window.rec_chk_debug, 4, 0)
-
-        self.main_window.rec_chk_debug_cost_bar = QCheckBox("费用条 Debug")
-        self.main_window.rec_chk_debug_cost_bar.setToolTip(
-            "RegionStateTimer 费用条检测与计时器日志（打印较多）。"
-        )
-        param_layout.addWidget(self.main_window.rec_chk_debug_cost_bar, 4, 1)
-
-        self.main_window.rec_chk_debug_resolver = QCheckBox("离线识别 Debug")
-        self.main_window.rec_chk_debug_resolver.setToolTip(
-            "停止录制后 OfflineResolver 的匹配分数、候选 slot 数等日志。"
-        )
-        param_layout.addWidget(self.main_window.rec_chk_debug_resolver, 4, 2)
-
-        self.main_window.rec_chk_debug_screenshot = QCheckBox("调试截图")
-        self.main_window.rec_chk_debug_screenshot.setToolTip(
-            "每次 DEPLOY/RETREAT/SKILL 保存调试用截图到 screenshots 目录。"
-        )
-        param_layout.addWidget(self.main_window.rec_chk_debug_screenshot, 4, 3)
+        param_layout.addWidget(self.main_window.combo_rec_debug, 4, 1, 1, 3)
 
         # 干员列表 + 道具列表并排
         op_group = QGroupBox("干员列表")
@@ -203,7 +191,7 @@ class RecorderTab(QWidget):
         self.main_window.rec_initial_operator_count.valueChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_item_count.valueChanged.connect(self.main_window._save_config)
         self.main_window.combo_avatar_model.currentIndexChanged.connect(self.main_window._save_config)
-        self.main_window.rec_chk_debug.stateChanged.connect(self.main_window._save_config)
+        self.main_window.combo_rec_debug.item_changed.connect(self.main_window._save_config)
         self.main_window.rec_chk_support_op.stateChanged.connect(self.main_window._save_config)
 
         # 使用说明
@@ -310,10 +298,11 @@ class RecorderTab(QWidget):
         stage_code = self.main_window.rec_stage_code.text().strip() or None
         initial_item_count = self.main_window.rec_initial_item_count.value()
         support_count = 1 if self.main_window.rec_chk_support_op.isChecked() else 0
-        rec_debug = self.main_window.rec_chk_debug.isChecked()
-        rec_debug_cost_bar = self.main_window.rec_chk_debug_cost_bar.isChecked()
-        rec_debug_resolver = self.main_window.rec_chk_debug_resolver.isChecked()
-        rec_debug_screenshot = self.main_window.rec_chk_debug_screenshot.isChecked()
+        debug_keys = set(self.main_window.combo_rec_debug.checked_data())
+        rec_debug = "recorder" in debug_keys
+        rec_debug_cost_bar = "cost_bar" in debug_keys
+        rec_debug_resolver = "resolver" in debug_keys
+        rec_debug_screenshot = "screenshot" in debug_keys
 
         self._normal_overlay_started = False
         self._recorder_overlay_timer_mode = False
@@ -383,7 +372,7 @@ class RecorderTab(QWidget):
             self._stop_recording()
             return
         overlay = getattr(self.main_window, "_recorder_overlay", None)
-        debug = self.main_window.rec_chk_debug.isChecked()
+        debug = "recorder" in set(self.main_window.combo_rec_debug.checked_data())
         if debug:
             print(f"[recorder_tab poll] state={state} started={getattr(self, '_normal_overlay_started', False)} timer_mode={getattr(self, '_recorder_overlay_timer_mode', False)} switch_at={getattr(self, '_recording_overlay_switch_at', 0):.3f} now={time.time():.3f}")
         if overlay is not None:

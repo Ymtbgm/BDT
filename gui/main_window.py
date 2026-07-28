@@ -21,6 +21,7 @@ from core.capture import WindowCapture
 from core.region_state_timer import RegionStateTimer
 from core.recorder import ActionRecorder
 from gui.timer_overlay import TimerOverlay
+from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo
 from gui.tabs import (
     ExecTab,
@@ -150,11 +151,8 @@ class MainWindow(QMainWindow):
     rec_stage_code: QLineEdit
     rec_grid_rows: QSpinBox
     rec_grid_cols: QSpinBox
-    rec_chk_debug: QCheckBox
-    rec_chk_debug_cost_bar: QCheckBox
-    rec_chk_debug_resolver: QCheckBox
-    rec_chk_debug_screenshot: QCheckBox
     rec_chk_support_op: QCheckBox
+    combo_rec_debug: CheckedComboBox
     rec_initial_operator_count: QSpinBox
     rec_initial_item_count: QSpinBox
     rec_op_table: QTableWidget
@@ -292,10 +290,7 @@ class MainWindow(QMainWindow):
             "cost_tag": self.combo_cost_tag.currentData() or "",
             "ocr_engine": self.combo_ocr_engine.currentData() or "auto",
             "avatar_model": self.combo_avatar_model.currentData() or "resnet18",
-            "rec_debug": self.rec_chk_debug.isChecked(),
-            "rec_debug_cost_bar": self.rec_chk_debug_cost_bar.isChecked(),
-            "rec_debug_resolver": self.rec_chk_debug_resolver.isChecked(),
-            "rec_debug_screenshot": self.rec_chk_debug_screenshot.isChecked(),
+            "rec_debug_keys": self.combo_rec_debug.checked_data(),
             "rec_support_op": self.rec_chk_support_op.isChecked(),
             "rec_stage_name": self.rec_stage_name.text(),
             "rec_stage_code": self.rec_stage_code.text(),
@@ -370,10 +365,19 @@ class MainWindow(QMainWindow):
         idx = self.combo_avatar_model.findData(avatar_model)
         if idx >= 0:
             self.combo_avatar_model.setCurrentIndex(idx)
-        self.rec_chk_debug.setChecked(config.get("rec_debug", False))
-        self.rec_chk_debug_cost_bar.setChecked(config.get("rec_debug_cost_bar", False))
-        self.rec_chk_debug_resolver.setChecked(config.get("rec_debug_resolver", False))
-        self.rec_chk_debug_screenshot.setChecked(config.get("rec_debug_screenshot", False))
+        self.combo_rec_debug.set_checked_data(config.get("rec_debug_keys", []))
+        # 兼容旧配置：根据原来的布尔值构造勾选列表
+        legacy_keys = []
+        if config.get("rec_debug"):
+            legacy_keys.append("recorder")
+        if config.get("rec_debug_cost_bar"):
+            legacy_keys.append("cost_bar")
+        if config.get("rec_debug_resolver"):
+            legacy_keys.append("resolver")
+        if config.get("rec_debug_screenshot"):
+            legacy_keys.append("screenshot")
+        if legacy_keys:
+            self.combo_rec_debug.set_checked_data(legacy_keys)
         self.rec_chk_support_op.setChecked(config.get("rec_support_op", False))
         self.rec_stage_name.setText(config.get("rec_stage_name", ""))
         self.rec_stage_code.setText(config.get("rec_stage_code", ""))
