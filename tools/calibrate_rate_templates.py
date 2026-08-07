@@ -68,22 +68,34 @@ def _frame_diff(prev: Optional[np.ndarray], curr: np.ndarray) -> float:
 def _decide_state(
     score_fast: float,
     score_slow: float,
+    score_fast2x: float,
     mean_diff: float,
     match_confidence: float,
     diff_threshold: float,
 ) -> str:
+    """与 RegionStateTimer 一致，但增加 transition 判定：
+    当帧间差分过大或三个模板都没有绝对优势时，认为处于过渡态。
+    """
+    # fast2x 需要置信度且最高
+    if (
+        score_fast2x >= match_confidence
+        and score_fast2x > score_fast
+        and score_fast2x > score_slow
+    ):
+        return "fast2x" if mean_diff <= diff_threshold else "transition"
+    # fast vs slow
     if (
         score_fast >= match_confidence
         and score_fast > score_slow
-        and mean_diff <= diff_threshold
+        and score_fast >= score_fast2x
     ):
-        return "fast"
+        return "fast" if mean_diff <= diff_threshold else "transition"
     if (
         score_slow >= match_confidence
         and score_slow > score_fast
-        and mean_diff <= diff_threshold
+        and score_slow >= score_fast2x
     ):
-        return "slow"
+        return "slow" if mean_diff <= diff_threshold else "transition"
     return "transition"
 
 
@@ -94,24 +106,32 @@ def _burst_capture(
     mask_fast: Optional[np.ndarray],
     tmpl_slow: Optional[np.ndarray],
     mask_slow: Optional[np.ndarray],
+    tmpl_fast2x: Optional[np.ndarray],
+    mask_fast2x: Optional[np.ndarray],
     match_confidence: float,
     diff_threshold: float,
+    fps: int = 80,
+    duration_s: float = 1.0,
     preprocess: str = "none",
     binary_threshold: int = 150,
     save: bool = True,
 ):
-    """按下 F9 后采集 1 秒（30 帧，每 33ms 一帧）并输出状态表。"""
-    print("\n[采集] 开始 1 秒 30 帧采集（33ms/帧），请在采集期间进行倍率切换...")
+    """按下 F9 后高速采集并输出状态表。"""
+    frame_count = int(fps * duration_s)
+    interval = 1.0 / fps
+    print(
+        f"\n[采集] 开始 {duration_s}s {frame_count} 帧采集（{interval*1000:.1f}ms/帧），"
+        f"请在采集期间进行倍率切换..."
+    )
 
     method = cv2.TM_CCORR_NORMED if preprocess == "mask" else cv2.TM_CCOEFF_NORMED
     tmpl_fast_p = _binarize(tmpl_fast, binary_threshold) if preprocess == "binary" and tmpl_fast is not None else tmpl_fast
     tmpl_slow_p = _binarize(tmpl_slow, binary_threshold) if preprocess == "binary" and tmpl_slow is not None else tmpl_slow
-
-    interval = 1.0 / 30.0
+    tmpl_fast2x_p = _binarize(tmpl_fast2x, binary_threshold) if preprocess == "binary" and tmpl_fast2x is not None else tmpl_fast2x
     frames = []
     prev_gray: Optional[np.ndarray] = None
     start = time.perf_counter()
-    for i in range(30):
+    for i in range(frame_count):
         t0 = time.perf_counter()
         img = cap.capture_roi(*roi)
         ts = (t0 - start) * 1000.0
@@ -125,15 +145,17 @@ def _burst_capture(
 
         score_fast = _match_score(gray, tmpl_fast_p, mask=mask_fast if preprocess == "mask" else None, method=method)
         score_slow = _match_score(gray, tmpl_slow_p, mask=mask_slow if preprocess == "mask" else None, method=method)
+        score_fast2x = _match_score(gray, tmpl_fast2x_p, mask=mask_fast2x if preprocess == "mask" else None, method=method)
         mean_diff = _frame_diff(prev_gray, gray)
         prev_gray = gray.copy()
-        state = _decide_state(score_fast, score_slow, mean_diff, match_confidence, diff_threshold)
+        state = _decide_state(score_fast, score_slow, score_fast2x, mean_diff, match_confidence, diff_threshold)
 
         frames.append({
             "idx": i,
             "ts_ms": ts,
             "score_fast": score_fast,
             "score_slow": score_slow,
+            "score_fast2x": score_fast2x,
             "diff": mean_diff,
             "state": state,
             "gray": gray,
@@ -147,7 +169,7 @@ def _burst_capture(
                 str(out_dir / f"burst_{int(start*1000)}_{i:03d}_{state}.png")
             )
 
-        # 按 33ms 节拍等待
+        # 按目标帧率节拍等待
         elapsed = time.perf_counter() - t0
         sleep_time = max(0.0, interval - elapsed)
         if sleep_time > 0:
@@ -159,14 +181,14 @@ def _burst_capture(
         print(f"[采集] 帧图已保存到: {ROOT / 'debug' / 'calibrate_rate'}")
 
     # 输出结果表
-    header = f"{'帧':>3} | {'时间ms':>8} | {'fast':>6} | {'slow':>6} | {'diff':>7} | state"
+    header = f"{'帧':>3} | {'时间ms':>8} | {'fast':>6} | {'slow':>6} | {'fast2x':>6} | {'diff':>7} | state"
     print(header)
     print("-" * len(header))
     for f in frames:
         print(
             f"{f['idx']:>3} | {f['ts_ms']:>8.1f} | "
             f"{f['score_fast']:>6.3f} | {f['score_slow']:>6.3f} | "
-            f"{f['diff']:>7.2f} | {f['state']}"
+            f"{f['score_fast2x']:>6.3f} | {f['diff']:>7.2f} | {f['state']}"
         )
 
     transitions = [f for f in frames if f["state"] == "transition"]
@@ -191,6 +213,18 @@ def main():
         default=150,
         help="二值化/掩膜阈值（默认 150）",
     )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=80,
+        help="高速采集帧率（默认 80fps，对应 RegionStateTimer 实际采样周期）",
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=1.0,
+        help="高速采集时长（秒，默认 1.0）",
+    )
     args = parser.parse_args()
 
     cap = WindowCapture(backend="mss")
@@ -199,11 +233,14 @@ def main():
     tmpl_root = ROOT / "core" / "resource"
     tmpl_fast, mask_fast = _load_template(str(tmpl_root / "1X.png"))
     tmpl_slow, mask_slow = _load_template(str(tmpl_root / "0.2X.png"))
+    tmpl_fast2x, mask_fast2x = _load_template(str(tmpl_root / "2X.png"))
 
     if tmpl_fast is None:
         print("[警告] 未找到 1X.png 模板")
     if tmpl_slow is None:
-        print("[警告] 未找到 0.2X.png 模板，请用 tools/capture_region_templates.py F10 捕获")
+        print("[警告] 未找到 0.2X.png 模板")
+    if tmpl_fast2x is None:
+        print("[警告] 未找到 2X.png 模板")
     if tmpl_fast is None or tmpl_slow is None:
         print("按 ESC 退出")
         while not keyboard.is_pressed("esc"):
@@ -216,11 +253,12 @@ def main():
     method = cv2.TM_CCORR_NORMED if args.preprocess == "mask" else cv2.TM_CCOEFF_NORMED
     tmpl_fast_p = _binarize(tmpl_fast, args.binary_threshold) if args.preprocess == "binary" else tmpl_fast
     tmpl_slow_p = _binarize(tmpl_slow, args.binary_threshold) if args.preprocess == "binary" else tmpl_slow
+    tmpl_fast2x_p = _binarize(tmpl_fast2x, args.binary_threshold) if args.preprocess == "binary" and tmpl_fast2x is not None else tmpl_fast2x
 
     print("[倍率模板校准工具]")
     print(f"预处理: {args.preprocess}")
-    print("持续捕获区域 B，实时显示 1x/0.2x 模板得分、帧差和判定状态")
-    print("按 F9 开始 1 秒 30 帧采集（33ms/帧），按 ESC 退出")
+    print("持续捕获区域 B，实时显示 1x/2x/0.2x 模板得分、帧差和判定状态")
+    print("按 F9 开始高速采集（默认 80fps/1s），按 ESC 退出")
     print()
 
     prev_gray: Optional[np.ndarray] = None
@@ -237,8 +275,12 @@ def main():
                 mask_fast,
                 tmpl_slow,
                 mask_slow,
+                tmpl_fast2x,
+                mask_fast2x,
                 match_confidence,
                 diff_threshold,
+                fps=args.fps,
+                duration_s=args.duration,
                 preprocess=args.preprocess,
                 binary_threshold=args.binary_threshold,
             )
@@ -266,16 +308,22 @@ def main():
             mask=mask_slow if args.preprocess == "mask" else None,
             method=method,
         )
+        score_fast2x = _match_score(
+            gray,
+            tmpl_fast2x_p,
+            mask=mask_fast2x if args.preprocess == "mask" else None,
+            method=method,
+        )
         mean_diff = _frame_diff(prev_gray, gray)
         prev_gray = gray.copy()
-        state = _decide_state(score_fast, score_slow, mean_diff, match_confidence, diff_threshold)
+        state = _decide_state(score_fast, score_slow, score_fast2x, mean_diff, match_confidence, diff_threshold)
 
         if state != last_state:
             print(f"状态切换 -> {state}")
             last_state = state
 
         print(
-            f"\rfast={score_fast:.3f} slow={score_slow:.3f} diff={mean_diff:6.2f} state={state}  ",
+            f"\rfast={score_fast:.3f} slow={score_slow:.3f} fast2x={score_fast2x:.3f} diff={mean_diff:6.2f} state={state}  ",
             end="",
             flush=True,
         )

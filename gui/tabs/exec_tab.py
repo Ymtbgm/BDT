@@ -192,14 +192,6 @@ class ExecTab(QWidget):
         self.main_window.combo_cost_tag.addItem("费用回复降低75%", "cc_75")
         contract_layout.addWidget(self.main_window.combo_cost_tag)
 
-        contract_layout.addWidget(QLabel("OCR 引擎"))
-        self.main_window.combo_ocr_engine = QComboBox()
-        self.main_window.combo_ocr_engine.addItem("自动 (推荐 PaddleX ONNX)", "auto")
-        self.main_window.combo_ocr_engine.addItem("PaddleX ONNX Runtime", "paddlex_onnx")
-        self.main_window.combo_ocr_engine.addItem("PaddleOCR transformers", "transformers")
-        self.main_window.combo_ocr_engine.addItem("PaddleOCR paddle_static", "paddle")
-        contract_layout.addWidget(self.main_window.combo_ocr_engine)
-
         contract_layout.addStretch()
         layout.addWidget(contract_group)
 
@@ -455,9 +447,6 @@ class ExecTab(QWidget):
         cost_tag = self.main_window.combo_cost_tag.currentData()
         if cost_tag:
             args.extend(["--cost-tag", cost_tag])
-        ocr_engine = self.main_window.combo_ocr_engine.currentData()
-        if ocr_engine:
-            args.extend(["--ocr-engine", ocr_engine])
         if self.main_window.chk_borrow_support.isChecked():
             args.append("--borrow-support")
             args.extend([
@@ -510,10 +499,10 @@ class ExecTab(QWidget):
                 continue
             if "[系统] 脚本开始运行" in stripped:
                 self.main_window.status_label.setText("状态: 运行中")
-            if "[OCR] 初始化成功" in stripped and not self.main_window._has_minimized:
+            if "[费用条同步]" in stripped and not self.main_window._has_minimized:
                 self.main_window._has_minimized = True
-                self.main_window.showMinimized()
-            if any(p in stripped for p in ("Creating model", "Model files already exist", "To redownload", "Loading weights", "%|", "[32m", "[0m", "[OCR] 初始化成功")):
+                QTimer.singleShot(0, self.main_window.showMinimized)
+            if any(p in stripped for p in ("Creating model", "Model files already exist", "To redownload", "Loading weights", "%|", "[32m", "[0m")):
                 continue
             if stripped.startswith("__TIMER_SHIELD__:"):
                 try:

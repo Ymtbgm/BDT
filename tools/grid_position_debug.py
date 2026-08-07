@@ -66,6 +66,39 @@ def draw_grid_positions(
     return canvas
 
 
+def draw_tile_polygons(
+    image: np.ndarray,
+    tile_calc: TilePosCalculator,
+    side: bool = False,
+    outline_color: tuple = (0, 255, 255),
+    fill_color: tuple = (0, 255, 255),
+    thickness: int = 2,
+    alpha: float = 0.08,
+) -> np.ndarray:
+    """在截图上绘制每个格子的投影四边形。"""
+    canvas = image.copy().astype(np.float32)
+    rows = tile_calc.grid_rows
+    cols = tile_calc.grid_cols
+
+    # 1) 半透明填充（避免盖住底层画面）
+    overlay = canvas.copy()
+    for r in range(rows):
+        for c in range(cols):
+            poly = np.array(tile_calc.get_tile_polygon(r, c, side=side), dtype=np.int32)
+            poly = poly.reshape((-1, 1, 2))
+            cv2.fillPoly(overlay, [poly], fill_color)
+    cv2.addWeighted(overlay, alpha, canvas, 1 - alpha, 0, canvas)
+
+    # 2) 不透明边框（确保格子边界清晰可见）
+    canvas = canvas.astype(np.uint8)
+    for r in range(rows):
+        for c in range(cols):
+            poly = np.array(tile_calc.get_tile_polygon(r, c, side=side), dtype=np.int32)
+            poly = poly.reshape((-1, 1, 2))
+            cv2.polylines(canvas, [poly], True, outline_color, thickness)
+    return canvas
+
+
 def draw_deploy_roi(
     image: np.ndarray,
     deploy_x: int,
@@ -143,6 +176,7 @@ def main():
     parser.add_argument("--stage-code", type=str, default=None, help="关卡 code，用于从 levels.json 加载精确 view 和尺寸")
     parser.add_argument("--stage-name", type=str, default=None, help="关卡 name，用于从 levels.json 加载精确 view 和尺寸")
     parser.add_argument("--side", action="store_true", help="同时绘制 side=True 的位置（蓝色）")
+    parser.add_argument("--polygons", action="store_true", help="同时绘制每个格子的投影四边形（半透明填充+边框）")
     parser.add_argument("--output", type=str, default=None, help="输出图片路径")
     parser.add_argument("--deploy-row", type=int, default=None, help="部署位置所在行（格子坐标）")
     parser.add_argument("--deploy-col", type=int, default=None, help="部署位置所在列（格子坐标）")
@@ -195,7 +229,13 @@ def main():
         stage_name=args.stage_name,
     )
 
-    canvas = draw_grid_positions(image, tile_calc, side=False, color=(0, 0, 255))
+    canvas = image.copy()
+    if args.polygons:
+        canvas = draw_tile_polygons(canvas, tile_calc, side=False, outline_color=(0, 0, 255), fill_color=(0, 0, 255))
+        if args.side:
+            canvas = draw_tile_polygons(canvas, tile_calc, side=True, outline_color=(255, 0, 0), fill_color=(255, 0, 0))
+
+    canvas = draw_grid_positions(canvas, tile_calc, side=False, color=(0, 0, 255))
     if args.side:
         canvas = draw_grid_positions(canvas, tile_calc, side=True, color=(255, 0, 0))
 

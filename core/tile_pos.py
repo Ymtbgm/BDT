@@ -79,32 +79,51 @@ def _guess_view(grid_cols: int, grid_rows: int) -> Tuple[Tuple[float, float, flo
     return _DEFAULT_VIEW_NORMAL, _DEFAULT_VIEW_SIDE
 
 
-def _load_view_from_json(code: Optional[str] = None, name: Optional[str] = None) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
-    """从本地 levels.json 加载精确 view。"""
+def _levels_json_path() -> Path:
+    """返回 levels.json 的查找路径。"""
     import sys
     if getattr(sys, "frozen", False):
-        _base = Path(sys.executable).parent / "core" / "resource"
-    else:
-        _base = Path(__file__).parent / "resource"
-    paths = [
-        _base / "levels.json",
-    ]
-    for p in paths:
-        if p.exists():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    levels = json.load(f)
-                for lv in levels:
-                    if code and lv.get("code") == code:
-                        view = lv.get("view", [])
-                        if len(view) >= 2:
-                            return tuple(view[0]), tuple(view[1])
-                    if name and lv.get("name") == name:
-                        view = lv.get("view", [])
-                        if len(view) >= 2:
-                            return tuple(view[0]), tuple(view[1])
-            except Exception:
-                pass
+        return Path(sys.executable).parent / "core" / "resource" / "levels.json"
+    return Path(__file__).parent / "resource" / "levels.json"
+
+
+def _load_levels() -> list:
+    """加载并缓存 levels.json 内容。"""
+    p = _levels_json_path()
+    if not p.exists():
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _load_view_from_json(code: Optional[str] = None, name: Optional[str] = None) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+    """从本地 levels.json 加载精确 view。"""
+    for lv in _load_levels():
+        if code and lv.get("code") == code:
+            view = lv.get("view", [])
+            if len(view) >= 2:
+                return tuple(view[0]), tuple(view[1])
+        if name and lv.get("name") == name:
+            view = lv.get("view", [])
+            if len(view) >= 2:
+                return tuple(view[0]), tuple(view[1])
+    return None
+
+
+def load_stage_dimensions(code: str) -> Optional[Tuple[int, int]]:
+    """根据关卡 code 从 levels.json 加载地图尺寸 (width, height)。
+
+    返回 (grid_cols, grid_rows)，即列数、行数；未找到时返回 None。
+    """
+    for lv in _load_levels():
+        if lv.get("code") == code:
+            width = lv.get("width")
+            height = lv.get("height")
+            if isinstance(width, int) and isinstance(height, int):
+                return width, height
     return None
 
 
@@ -215,3 +234,54 @@ class TilePosCalculator:
                 row.append(self.get_screen_pos(r, c, side))
             result.append(row)
         return result
+
+    def get_tile_polygon(
+        self, row: int, col: int, side: bool = False
+    ) -> Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int], Tuple[int, int]]:
+        """返回指定格子在屏幕上的投影四边形（左上/右上/右下/左下顺序不严格）。
+
+        基于格子在世界坐标中占据 [col-0.5, col+0.5] x [row-0.5, row+0.5]
+        的矩形，投影四个角到屏幕。
+        """
+        matrix = self._get_transform_matrix(side)
+
+        corners = [
+            (col - 0.5, row - 0.5),
+            (col + 0.5, row - 0.5),
+            (col + 0.5, row + 0.5),
+            (col - 0.5, row + 0.5),
+        ]
+        screen_corners = []
+        for wx, wy in corners:
+            sx_world = wx - (self.grid_cols - 1) / 2
+            sy_world = (self.grid_rows - 1) / 2 - wy
+            px, py, _, pw = np.dot(matrix, np.array([sx_world, sy_world, 0.0, 1]))
+            sx = (1 + px / pw) / 2 * self.screen_width
+            sy = (1 - py / pw) / 2 * self.screen_height
+            screen_corners.append((int(sx), int(sy)))
+        return tuple(screen_corners)  # type: ignore[return-value]
+
+    def hit_test(
+        self, x: int, y: int, side: bool = False
+    ) -> Optional[Tuple[int, int]]:
+        """判断屏幕点 (x, y) 落在哪个格子的投影四边形内部。
+
+        优先返回包含该点的格子；若点恰好落在多个四边形重叠处（side 视角边缘），
+        取中心点最近的一个；若完全不命中，返回 None。
+        """
+        import cv2
+
+        point = (float(x), float(y))
+        candidates = []
+        for r in range(self.grid_rows):
+            for c in range(self.grid_cols):
+                poly = np.array(self.get_tile_polygon(r, c, side), dtype=np.float32)
+                dist = cv2.pointPolygonTest(poly, point, False)
+                if dist >= 0:
+                    cx, cy = self.get_screen_pos(r, c, side)
+                    d = (cx - x) ** 2 + (cy - y) ** 2
+                    candidates.append((d, r, c))
+        if candidates:
+            candidates.sort(key=lambda item: item[0])
+            return candidates[0][1], candidates[0][2]
+        return None

@@ -11,6 +11,8 @@ import numpy as np
 
 from core.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
 from core.ocr_engine import OCREngine
+from core.digit_recognizer import DigitRecognizer
+from core.yolo_detector import QuantityBadgeDetector
 from core import cost_recognition
 import core.constants as constants
 from models.raw_recording import RawRecording, RawAction, KeyframeType
@@ -60,12 +62,25 @@ class _InitialSlotInfo:
 
 
 @dataclass
+class _InfiniteItem:
+    """无限使用初始道具（无数量角标，可反复返回部署栏）。"""
+
+    original_bar_index: int
+    expected_cost: int
+    name: str
+    present: bool = True
+    avatar: Optional[np.ndarray] = None
+
+
+@dataclass
 class _SlotState:
     """某一时刻部署栏某个 slot 的状态（从右往左 0 开始）。"""
 
     name: str
     is_item: bool = False
     is_summon: bool = False
+    is_infinite: bool = False
+    original_bar_index: Optional[int] = None
     quantity: Optional[int] = None
     cost: Optional[int] = None
     avatar: Optional[np.ndarray] = None
@@ -103,8 +118,8 @@ class OfflineResolver:
     # 注意：recorder 在截取整栏时把 top 上移了 20px（y = 1390 - 20），因此
     # 解析器里 bar_img 顶部对应的窗口 y 是 1370 而不是 1390。
     # 数量 ROI 位于屏幕最底部，因此整栏高度需要覆盖到窗口底部（1370 -> 1600）。
-    _BAR_CAPTURE_TOP_RATIO = 1370 / 1600
-    _BAR_CAPTURE_HEIGHT_RATIO = 230 / 1600
+    _BAR_CAPTURE_TOP_RATIO = 1360 / 1600
+    _BAR_CAPTURE_HEIGHT_RATIO = 240 / 1600
     _BAR_AVATAR_SIZE_RATIO = 120 / 1600
     _BAR_AVATAR_Y_OFFSET_RATIO = -10 / 120
     _BAR_CENTER_Y_RATIO = 1500 / 1600
@@ -121,11 +136,19 @@ class OfflineResolver:
     _QUANTITY_MIN_W_PX_1600 = 20
     _QUANTITY_MIN_H_PX_1600 = 15
 
+    # 数量角标最大尺寸（以 1600h 为基准），过大则视为 UI 元素/误检
+    # 正常数量角标宽度不超过 60，高度不超过 40
+    _QUANTITY_MAX_W_PX_1600 = 80
+    _QUANTITY_MAX_H_PX_1600 = 60
+
     # 召唤物模板匹配阈值：对未知/召唤物模板要求更高置信度，避免同一召唤物被多次创建不同占位
     _SUMMON_MATCH_THRESHOLD = 0.80
 
     # 召唤物最终聚类阈值：最后对 obs_id 做全局聚类时，相似度超过该阈值才视为同一召唤物
     _SUMMON_CLUSTER_THRESHOLD = 0.85
+
+    # 无限道具在场检测置信度阈值：低于该值的结果不用于切换在场状态
+    _INFINITE_ITEM_PRESENCE_CONF_THRESHOLD = 0.6
 
     # 冷却召唤物红像素检测参数（基于 HSV，对暗红/酒红背景更鲁棒）
     _RED_COOLDOWN_HUE_LOW = 10
@@ -140,6 +163,7 @@ class OfflineResolver:
         session_dir: Optional[Path] = None,
         avatar_matcher: Optional[AvatarMatcherBase] = None,
         ocr: Optional[OCREngine] = None,
+        digit_recognizer: Optional[DigitRecognizer] = None,
         match_threshold: float = 0.70,
         debug: bool = False,
         avatar_model_name: str = "resnet18",
@@ -151,12 +175,15 @@ class OfflineResolver:
         self._match_threshold = match_threshold
         self._matcher = avatar_matcher
         self.ocr = ocr
+        self._digit_recognizer = digit_recognizer or DigitRecognizer(use_gpu=True)
+        self._yolo_detector = QuantityBadgeDetector()
         self._avatar_model_name = avatar_model_name
         self._session_dir = session_dir or Path("debug") / "recordings" / raw.session_id
 
         self._templates: Dict[str, np.ndarray] = {}
         self._unknown_counter = 0
         self._quantity_strip_debug_counter = 0
+        self._quantity_slot_debug_counter = 0
         self._operators: List[str] = []
         self._items: List[ItemInfo] = []
         self._summons: List[SummonInfo] = []
@@ -166,10 +193,12 @@ class OfflineResolver:
         self._item_count_hint = int(raw.hints.get("initial_item_count", 0))
         self._support_count = int(raw.hints.get("support_count", 0))
         self._item_bar_index: Dict[str, int] = {}
+        self._infinite_items: Dict[int, _InfiniteItem] = {}
         self._debug_log_path = self._session_dir / "resolve.log"
 
         # 正向 bar_slots 状态机使用
         self._prev_bar_state: List[_SlotState] = []
+        self._initial_operator_order: List[str] = []
         self._operator_index: Dict[str, int] = {}
         self._operator_info: Dict[str, _SlotState] = {}
         self._item_initial_quantity: Dict[str, int] = {}
@@ -197,7 +226,7 @@ class OfflineResolver:
 
         # 缓存：避免重复加载关键帧图片和重复 OCR
         self._image_cache: Dict[str, np.ndarray] = {}
-        self._quantity_boxes_cache: Dict[int, List[Tuple[List, float, int, float]]] = {}
+        self._quantity_boxes_cache: Dict[int, List[Tuple[List, float]]] = {}
         self._ocr_cost_cache: Dict[Tuple[int, int, int, int], Optional[int]] = {}
 
         # 数量 ROI 标定配置缓存 (total_slots, calibrations dict)
@@ -225,6 +254,29 @@ class OfflineResolver:
                     f.write(line + "\n")
             except Exception:
                 pass
+
+    def _support_operator_names(self) -> Set[str]:
+        """识别助战干员：优先使用初始部署区头像解析出的顺序。
+
+        初始 bar 状态是按从右到左解析的，因此最右侧的干员排在最前面；
+        转为从左到右后，助战干员（通常在干员区域最右）位于末尾。
+        若初始顺序不可用，则回退到名称“助战”前缀或原列表末尾假设。
+        """
+        if self._support_count <= 0:
+            return set()
+        if self._initial_operator_order:
+            return set(self._initial_operator_order[-self._support_count :])
+        support_names = [n for n in self._operators if n.startswith("助战")]
+        if len(support_names) < self._support_count:
+            fallback = [
+                n
+                for n in self._operators[-self._support_count :]
+                if n not in support_names
+            ]
+            support_names.extend(
+                fallback[: self._support_count - len(support_names)]
+            )
+        return set(support_names[: self._support_count])
 
     def resolve(self) -> ScriptModel:
         self._log(
@@ -324,12 +376,60 @@ class OfflineResolver:
             return None
         for roi in calibrations[active_key]:
             if roi.get("slot") == target_slot:
-                cx = roi["cx_ratio"]
-                cy = roi["cy_ratio"] + 0.005
+                # 中心从 x1/x2/y1/y2 计算，保留原有的 +0.005 下偏修正；
+                # 这样用户手动改 y1/y2 才会真正移动 ROI 中心，而不是只改变高度。
+                cx = (roi["x1_ratio"] + roi["x2_ratio"]) / 2
+                cy = (roi["y1_ratio"] + roi["y2_ratio"]) / 2 + 0.005
                 half_w = (roi["x2_ratio"] - roi["x1_ratio"]) / 2
                 half_h = (roi["y2_ratio"] - roi["y1_ratio"]) / 2
                 return cx, cy, half_w, half_h
         return None
+
+    def _get_quantity_roi_xranges(
+        self,
+        total_slots: int,
+        active_slot: Optional[int] = None,
+    ) -> Optional[Dict[int, Tuple[float, float]]]:
+        """返回每个 slot 的数量角标在整栏图片中的标定 x 范围（像素）。
+
+        如果指定了 active_slot 且标定中存在，则使用该 active_slot 的标定；
+        否则取所有 active_slot 标定的并集，以兼容不确定 active_slot 的场景。
+        total_slots <= 12 或找不到标定时返回 None。
+        """
+        if total_slots <= 12:
+            return None
+        calibrations = self._load_quantity_roi_config(total_slots)
+        if not calibrations:
+            return None
+
+        active_key = str(active_slot) if active_slot is not None else None
+        if active_key is not None and active_key in calibrations:
+            roi_list = calibrations[active_key]
+        else:
+            # 合并所有 active_slot 的 x 范围
+            merged: Dict[int, List[Tuple[float, float]]] = {}
+            for roi_list in calibrations.values():
+                for roi in roi_list:
+                    slot = roi.get("slot")
+                    if slot is None:
+                        continue
+                    merged.setdefault(slot, []).append(
+                        (roi["x1_ratio"], roi["x2_ratio"])
+                    )
+            result: Dict[int, Tuple[float, float]] = {}
+            for slot, ranges in merged.items():
+                x1 = min(r[0] for r in ranges)
+                x2 = max(r[1] for r in ranges)
+                result[slot] = (x1, x2)
+            return result
+
+        result: Dict[int, Tuple[float, float]] = {}
+        for roi in roi_list:
+            slot = roi.get("slot")
+            if slot is None:
+                continue
+            result[slot] = (roi["x1_ratio"], roi["x2_ratio"])
+        return result
 
     def _load_operator_cost_roi_config(self, total_slots: int) -> Optional[Dict[str, List[dict]]]:
         """加载并缓存 operator_cost logo 的 X 位置标定配置。"""
@@ -472,18 +572,92 @@ class OfflineResolver:
         if bar_img is None:
             self._log("TEAM_BAR 关键帧图片加载失败")
             return
+        self._log(f"[耗时] 加载 TEAM_BAR 图片: {(time.perf_counter()-t0)*1000:.1f}ms")
 
         total = self.raw.initial_operator_count + self.raw.initial_item_count
         if total <= 0:
             self._log("初始干员/道具数为 0，跳过初始状态")
             return
 
+        t1 = time.perf_counter()
+        quantities = self._parse_quantity_strip(bar_img, total, active_slot=None)
         self._prev_bar_state = self._parse_bar_state(
             bar_img,
             total,
+            quantities=quantities,
             time_ms=team_bar_kf.time_ms,
             active_slot=None,  # 初始部署区无 active slot，走动态 ROI
         )
+        self._log(f"[耗时] _parse_bar_state: {(time.perf_counter()-t1)*1000:.1f}ms")
+
+        # 检测无限道具：初始道具区中无数量角标的 slot。
+        # 注意：数量框检测到但数值识别失败（如模型返回 0）的 slot 仍应视为有限道具，
+        # 因此同时参考 _parse_quantity_strip 的成功识别结果和数量框检测的候选 slot。
+        t1b = time.perf_counter()
+        qty_boxes = self._ocr_quantity_boxes(bar_img)
+        window_width, _ = self._recover_window_size_from_bar(bar_img)
+        candidate_qty_slots = self._assign_quantity_boxes(
+            qty_boxes, total, window_width, active_slot=None
+        )
+        finite_item_count = 0
+        for i in range(self.raw.initial_item_count):
+            if i in quantities or i in candidate_qty_slots:
+                finite_item_count += 1
+                continue
+            cost = self._ocr_slot_cost(bar_img, i, total)
+            if cost is None:
+                cost = 0
+            name = f"__infinite_item_{i}__"
+            slot_avatar = (
+                self._prev_bar_state[i].avatar
+                if i < len(self._prev_bar_state)
+                else None
+            )
+            self._infinite_items[i] = _InfiniteItem(
+                original_bar_index=i,
+                expected_cost=cost,
+                name=name,
+                present=True,
+                avatar=slot_avatar,
+            )
+            self._summon_costs[name] = cost
+            self._summon_deploy_counts[name] = 0
+            self._log(f"初始部署区 slot={i}: 无限道具 {name}, expected_cost={cost}")
+        self._remaining_item_count = finite_item_count
+
+        # 把无限道具 slot 覆盖回 _prev_bar_state
+        new_state: List[_SlotState] = []
+        for i, slot in enumerate(self._prev_bar_state):
+            if i in self._infinite_items and self._infinite_items[i].present:
+                item = self._infinite_items[i]
+                new_state.append(
+                    _SlotState(
+                        name=item.name,
+                        is_infinite=True,
+                        is_summon=True,
+                        original_bar_index=item.original_bar_index,
+                        cost=item.expected_cost,
+                        avatar=slot.avatar,
+                    )
+                )
+            else:
+                new_state.append(slot)
+        self._prev_bar_state = new_state
+        # 清理 _item_bar_index 中因 _parse_bar_state 临时生成的无限道具 __item_N__ 条目，
+        # 避免后续按 bar_index 反查时把无限道具当成有限道具。
+        for original_idx in self._infinite_items.keys():
+            stale_name = self._item_name_for_bar_index(original_idx)
+            self._item_bar_index.pop(stale_name, None)
+        # 无限道具按原始 bar_index 登记到 _item_bar_index，使构建 script.items 时能与
+        # script.summons 使用同一名称（含名称卡 OCR 重命名后）。
+        for original_idx, item in self._infinite_items.items():
+            self._item_bar_index[item.name] = original_idx
+        self._log(
+            f"[耗时] 检测无限道具: {(time.perf_counter()-t1b)*1000:.1f}ms, "
+            f"finite={finite_item_count}, infinite={len(self._infinite_items)}"
+        )
+
+        t2 = time.perf_counter()
         for i, slot in enumerate(self._prev_bar_state):
             if not slot.is_item and not slot.is_summon:
                 self._operator_index[slot.name] = i
@@ -492,12 +666,277 @@ class OfflineResolver:
                 cost = self._ocr_slot_cost(bar_img, i, total)
                 if cost is not None:
                     slot.cost = cost
+        # 保存初始干员从左到右的视觉顺序，后续构建 script.operators 直接回填
+        self._initial_operator_order = [
+            s.name
+            for s in reversed(self._prev_bar_state)
+            if not s.is_item and not s.is_summon
+        ]
+        self._log(f"[耗时] 初始费用 OCR({len(self._prev_bar_state)} slots): {(time.perf_counter()-t2)*1000:.1f}ms")
         # 初始状态按截图实际位置保留，不按费用排序（同费用干员顺序会乱）
         self._log(
-            f"初始 bar 状态: total={total}, "
-            f"slots={[f'{s.name}(cost={s.cost},qty={s.quantity})' for s in self._prev_bar_state]}"
+            f"初始 bar 状态: total={total}, finite_items={self._remaining_item_count}, "
+            f"infinite_items={len(self._infinite_items)}, "
+            f"slots={[f'{s.name}(cost={s.cost},qty={s.quantity},inf={s.is_infinite})' for s in self._prev_bar_state]}"
         )
         self._log(f"[耗时] 构建初始部署区状态: {(time.perf_counter()-t0)*1000:.1f}ms")
+
+    # ------------------------------------------------------------------
+    # 无限道具处理
+    # ------------------------------------------------------------------
+    def _current_bar_index_for_infinite(self, original_bar_index: int) -> int:
+        """计算指定原始 bar_index 的无限道具在当前部署栏上的 bar_index。"""
+        count = 0
+        for slot in self._prev_bar_state:
+            if slot.is_item and slot.name.startswith("__item_"):
+                idx = int(slot.name.split("_")[3])
+                if idx < original_bar_index:
+                    count += 1
+        for idx, item in self._infinite_items.items():
+            if idx < original_bar_index and item.present:
+                count += 1
+        return count
+
+    def _item_name_at_current_index(self, current_index: int) -> str:
+        """根据当前 bar_index 返回道具名称（基于原始 bar_index 顺序）。"""
+        present_original: List[Tuple[int, bool]] = []
+        for slot in self._prev_bar_state:
+            if slot.is_item and slot.name.startswith("__item_"):
+                present_original.append((int(slot.name.split("_")[3]), False))
+        for original_idx, item in self._infinite_items.items():
+            if item.present:
+                present_original.append((original_idx, True))
+        present_original.sort(key=lambda x: x[0])
+        if 0 <= current_index < len(present_original):
+            orig_idx, is_inf = present_original[current_index]
+            if is_inf:
+                return self._infinite_items[orig_idx].name
+            return self._item_name_for_bar_index(orig_idx)
+        return self._item_name_for_bar_index(current_index)
+
+    def _build_infinite_slot_map(self) -> Dict[int, _InfiniteItem]:
+        """返回当前 bar_index -> 无限道具 的映射。"""
+        result: Dict[int, _InfiniteItem] = {}
+        for item in self._infinite_items.values():
+            if item.present:
+                cur_idx = self._current_bar_index_for_infinite(item.original_bar_index)
+                result[cur_idx] = item
+        return result
+
+    def _ocr_cost_value_with_conf(
+        self,
+        bar_img: np.ndarray,
+        bar_index: int,
+        total_slots: int,
+        active_slot: Optional[int] = None,
+    ) -> Optional[Tuple[int, float]]:
+        """识别指定 slot 的费用并返回 (value, confidence)，优先 ONNX 模型。"""
+        cost_crop = self._crop_cost_from_bar(
+            bar_img, bar_index, total_slots, active_slot=active_slot
+        )
+        if cost_crop is None or cost_crop.size == 0:
+            return None
+        try:
+            proc_inv = cost_recognition.preprocess_cost_image_inv(cost_crop)
+            model_result = self._digit_recognizer.predict_cost(proc_inv)
+            if model_result:
+                value, conf = model_result
+                if 0 <= value <= 99:
+                    return value, conf
+        except Exception:
+            pass
+        if self.ocr is None:
+            return None
+        for preprocess in (
+            cost_recognition.preprocess_cost_image,
+            cost_recognition.preprocess_cost_image_inv,
+        ):
+            try:
+                proc = preprocess(cost_crop)
+                result = cost_recognition.extract_cost_with_conf(
+                    self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
+                )
+                if result:
+                    return result[0], result[1]
+            except Exception:
+                continue
+        return None
+
+    def _update_infinite_items_presence(
+        self, bar_img: np.ndarray, time_ms: int, active_slot: Optional[int] = None
+    ):
+        """根据当前 bar 图检测每个无限道具是否在场，并同步 _prev_bar_state。"""
+        if not self._infinite_items:
+            return
+        total_base = len(self._prev_bar_state)
+        changed = False
+        for original_idx, item in self._infinite_items.items():
+            cur_idx = self._current_bar_index_for_infinite(original_idx)
+            candidates = [total_base]
+            if total_base > 12:
+                candidates.append(total_base + 1)
+            best_result: Optional[Tuple[int, float]] = None
+            for total in candidates:
+                result = self._ocr_cost_value_with_conf(
+                    bar_img, cur_idx, total, active_slot=active_slot
+                )
+                if result is None:
+                    continue
+                if best_result is None or result[1] > best_result[1]:
+                    best_result = result
+            if best_result is None:
+                continue
+            value, conf = best_result
+
+            # 调试：保存本次无限道具费用 ROI，便于排查低置信度误报
+            if self.debug:
+                best_total = total_base
+                if total_base > 12:
+                    # 若 best_result 来自 total_base+1，重新裁剪以匹配
+                    res_total = total_base
+                    for total in candidates:
+                        tmp = self._ocr_cost_value_with_conf(
+                            bar_img, cur_idx, total, active_slot=active_slot
+                        )
+                        if tmp is not None and tmp[0] == value and tmp[1] == conf:
+                            res_total = total
+                            break
+                    best_total = res_total
+                cost_crop = self._crop_cost_from_bar(
+                    bar_img, cur_idx, best_total, active_slot=active_slot
+                )
+                if cost_crop is not None and cost_crop.size > 0:
+                    self._save_ocr_debug(
+                        cost_crop,
+                        f"infinite_{item.name}_{time_ms}_idx{cur_idx}_total{best_total}",
+                        value=value,
+                        conf=conf,
+                    )
+
+            # 低置信度结果不用于切换在场状态，避免单次误报导致道具被错误移除
+            if conf < self._INFINITE_ITEM_PRESENCE_CONF_THRESHOLD:
+                self._log(
+                    f"无限道具 {item.name} 在场检测置信度过低，忽略本次结果 "
+                    f"(OCR={value}, expected={item.expected_cost}, conf={conf:.2f}, cur_idx={cur_idx})"
+                )
+                continue
+
+            # 费用相同时，进一步用头像相似度或红像素判断，避免费用相同的干员被误判为道具
+            best_total = total_base
+            if total_base > 12:
+                res_total = total_base
+                for total in candidates:
+                    tmp = self._ocr_cost_value_with_conf(
+                        bar_img, cur_idx, total, active_slot=active_slot
+                    )
+                    if tmp is not None and tmp[0] == value and tmp[1] == conf:
+                        res_total = total
+                        break
+                best_total = res_total
+
+            current_avatar = self._crop_slot_avatar(
+                bar_img, cur_idx, best_total, active_slot=active_slot
+            )
+            avatar_sim = 0.0
+            red_ratio = 0.0
+            if current_avatar is not None and current_avatar.size > 0:
+                red_ratio = self._compute_red_ratio(current_avatar)
+                if item.avatar is not None and self._matcher is not None:
+                    try:
+                        matrix = self._matcher.compute_score_matrix(
+                            {item.name: item.avatar}, [current_avatar]
+                        )
+                        avatar_sim = matrix.get(item.name, {}).get(0, 0.0)
+                    except Exception as e:
+                        self._log(f"无限道具 {item.name} 头像匹配异常: {e}")
+
+            cost_match = value == item.expected_cost
+            # 没有初始头像时退回到纯费用判断
+            visual_match = (
+                item.avatar is None
+                or current_avatar is None
+                or avatar_sim >= 0.8
+                or red_ratio >= self._RED_COOLDOWN_MIN_RATIO
+            )
+            new_present = cost_match and visual_match
+
+            if self.debug or new_present != item.present:
+                self._log(
+                    f"无限道具 {item.name} 在场检测: OCR={value}, expected={item.expected_cost}, "
+                    f"conf={conf:.2f}, cur_idx={cur_idx}, avatar_sim={avatar_sim:.2f}, "
+                    f"red_ratio={red_ratio:.3f}, present={new_present}"
+                )
+                if current_avatar is not None and current_avatar.size > 0:
+                    self._save_ocr_debug(
+                        current_avatar,
+                        f"infinite_avatar_{item.name}_{time_ms}_idx{cur_idx}_total{best_total}",
+                        value=value,
+                        conf=conf,
+                    )
+
+            was_present = item.present
+            item.present = new_present
+            if item.present != was_present:
+                changed = True
+                if item.present:
+                    # 返回部署栏，生成 ADD_SUMMON（与当前 DEPLOY 同帧，按列表顺序先于 DEPLOY）
+                    self._actions.append(
+                        OperatorAction(
+                            time_ms=time_ms,
+                            action=ActionType.ADD_SUMMON,
+                            operator_name=item.name,
+                            grid=(1, 0),
+                        )
+                    )
+                    self._log(
+                        f"无限道具 {item.name} 返回部署栏，ADD_SUMMON @ {time_ms}ms "
+                        f"(OCR={value}, expected={item.expected_cost}, conf={conf:.2f}, cur_idx={cur_idx})"
+                    )
+                else:
+                    self._log(
+                        f"无限道具 {item.name} 离开部署栏 "
+                        f"(OCR={value}, expected={item.expected_cost}, conf={conf:.2f}, cur_idx={cur_idx})"
+                    )
+        if changed:
+            self._rebuild_prev_bar_state_items()
+
+    def _rebuild_prev_bar_state_items(self):
+        """根据当前有限/无限道具状态重建 _prev_bar_state 的道具区。"""
+        non_items = [s for s in self._prev_bar_state if not s.is_item and not s.is_infinite]
+        finite_slots: List[_SlotState] = []
+        for slot in self._prev_bar_state:
+            if slot.is_item and slot.name.startswith("__item_"):
+                finite_slots.append(slot)
+        infinite_slots: List[_SlotState] = []
+        for original_idx in sorted(self._infinite_items.keys()):
+            item = self._infinite_items[original_idx]
+            if item.present:
+                infinite_slots.append(
+                    _SlotState(
+                        name=item.name,
+                        is_infinite=True,
+                        is_summon=True,
+                        original_bar_index=item.original_bar_index,
+                        cost=item.expected_cost,
+                    )
+                )
+
+        def _orig_idx(s: _SlotState) -> int:
+            if s.original_bar_index is not None:
+                return s.original_bar_index
+            if s.name.startswith("__item_"):
+                return int(s.name.split("_")[3])
+            return 0
+
+        item_slots = finite_slots + infinite_slots
+        item_slots.sort(key=_orig_idx)
+        self._remaining_item_count = len(finite_slots)
+        self._prev_bar_state = item_slots + non_items
+        self._log(
+            f"重建 bar 状态: finite={self._remaining_item_count}, "
+            f"infinite={len(infinite_slots)}, non_items={len(non_items)}, "
+            f"items={[s.name for s in item_slots]}"
+        )
 
     def _preprocess_quantity_strip(self, strip: np.ndarray, invert: bool = False) -> np.ndarray:
         """对全宽数量条做二值化预处理，不放大。
@@ -509,8 +948,13 @@ class OfflineResolver:
         """
         gray = cv2.cvtColor(strip, cv2.COLOR_BGRA2GRAY)
         if invert:
-            # 纯白（>=240）→ 黑，其他 → 白
-            _, binary = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+            # 将较亮像素（>= threshold）→ 黑，其他 → 白
+            _, binary = cv2.threshold(
+                gray,
+                constants.DEPLOY_BAR_QUANTITY_INVERT_THRESHOLD,
+                255,
+                cv2.THRESH_BINARY_INV,
+            )
         else:
             _, binary = cv2.threshold(
                 gray,
@@ -551,16 +995,22 @@ class OfflineResolver:
                 best_raw = text
         return (best_qty, best_conf, best_raw) if best_qty is not None else None
 
-    def _ocr_quantity_boxes(self, bar_img: np.ndarray) -> List[Tuple[List, float, int, float]]:
-        """对全宽数量条 OCR，仅使用反色预处理，返回 [(bbox, center_x, quantity, conf)]。"""
+    def _ocr_quantity_boxes(self, bar_img: np.ndarray) -> List[Tuple[List, float]]:
+        """对全宽数量条做检测，优先使用 YOLO，YOLO 不可用时回退到 Paddle detect_text。
+
+        YOLO 在 binarized 数量条上直接检测 X+数字 角标框，避免 Paddle 检测漏框
+        以及与 ONNX 模型并发时的抖动问题。
+        最终框的位置仍交给 slot 级别的标定 ROI + X_num_model 读数。
+        """
         img_id = id(bar_img)
         if img_id in self._quantity_boxes_cache:
             return self._quantity_boxes_cache[img_id]
 
-        boxes: List[Tuple[List, float, int, float]] = []
-        if self.ocr is None:
+        boxes: List[Tuple[List, float]] = []
+        if bar_img.size == 0:
             self._quantity_boxes_cache[img_id] = boxes
             return boxes
+
         h_bar, w_bar = bar_img.shape[:2]
         window_width, window_height = self._recover_window_size_from_bar(bar_img)
         bar_top = window_height * self._BAR_CAPTURE_TOP_RATIO
@@ -573,129 +1023,148 @@ class OfflineResolver:
             self._quantity_boxes_cache[img_id] = boxes
             return boxes
 
-        all_lines: List[Tuple[List, str, float, bool]] = []
-        per_path_lines: Dict[bool, List[Tuple[List, str, float]]] = {
-            False: [],
-            True: [],
-        }
-        debug_canvases: Dict[bool, np.ndarray] = {}
-        for invert in (True,):
-            try:
-                proc = self._preprocess_quantity_strip(strip, invert=invert)
-                lines = self.ocr.recognize(proc, min_confidence=0.5)
-            except Exception as e:
-                self._log(f"数量条 OCR 异常 (invert={invert}): {e}")
-                continue
-            per_path_lines[invert] = lines
-            if self.debug:
-                debug_canvases[invert] = proc.copy()
-            for bbox, (text, conf) in lines:
-                digits = "".join(c for c in text if c.isdigit())
-                if not digits:
-                    continue
-                all_lines.append((bbox, digits, conf, invert))
+        all_boxes: List[Tuple[List, float]] = []
+        debug_canvas: Optional[np.ndarray] = None
+        use_yolo = False
 
-        # 仅使用反色策略的检测结果，按 center_x 距离合并相近的框
+        # 1) 优先使用 YOLO 检测
+        try:
+            proc = self._preprocess_quantity_strip(strip, invert=True)
+            if self._yolo_detector is not None and self._yolo_detector.available:
+                yolo_boxes = self._yolo_detector.detect(proc)
+                use_yolo = True
+                if self.debug:
+                    debug_canvas = proc.copy()
+                for bbox, det_conf in yolo_boxes:
+                    if not bbox:
+                        continue
+                    xs = [p[0] for p in bbox]
+                    center_x = sum(xs) / len(xs)
+                    all_boxes.append((bbox, center_x))
+                    self._log(
+                        f"YOLO 数量框: box_x=[{min(xs):.0f},{max(xs):.0f}] "
+                        f"det_conf={det_conf:.2f}"
+                    )
+                    if debug_canvas is not None:
+                        pts = np.array(bbox, dtype=np.int32).reshape((-1, 1, 2))
+                        cv2.polylines(debug_canvas, [pts], True, (0, 255, 0), 1)
+        except Exception as e:
+            self._log(f"YOLO 数量条检测异常，回退到 Paddle: {e}")
+            use_yolo = False
+
+        # 2) YOLO 不可用时回退到 Paddle detect_text + 框内 OCR 过滤
+        if not use_yolo:
+            if self.ocr is None:
+                self._quantity_boxes_cache[img_id] = boxes
+                return boxes
+            for invert in (True,):
+                try:
+                    proc = self._preprocess_quantity_strip(strip, invert=invert)
+                    bboxes = self.ocr.detect_text(proc) if self.ocr is not None else []
+                except Exception as e:
+                    self._log(f"数量条检测异常 (invert={invert}): {e}")
+                    continue
+                if self.debug:
+                    debug_canvas = proc.copy()
+                for bbox, det_conf in bboxes:
+                    if not bbox:
+                        continue
+                    xs = [p[0] for p in bbox]
+                    ys = [p[1] for p in bbox]
+                    x1, x2 = max(0, int(min(xs))), min(w_bar, int(max(xs)))
+                    y1b, y2b = max(0, int(min(ys))), min(strip.shape[0], int(max(ys)))
+                    if x2 <= x1 or y2b <= y1b:
+                        continue
+                    # 按 1600h 归一化尺寸过滤过小/过大的检测框
+                    scale = window_height / 1600
+                    w_norm = (x2 - x1) / scale
+                    h_norm = (y2b - y1b) / scale
+                    if (
+                        w_norm < self._QUANTITY_MIN_W_PX_1600
+                        or h_norm < self._QUANTITY_MIN_H_PX_1600
+                    ):
+                        self._log(
+                            f"数量条检测忽略过小框: "
+                            f"box_x=[{x1:.0f},{x2:.0f}] det_conf={det_conf:.2f} "
+                            f"(w={w_norm:.1f}, h={h_norm:.1f})"
+                        )
+                        continue
+
+                    # 对候选框做 OCR 识别，只保留包含数字的数量框
+                    center_x = sum(xs) / len(xs)
+                    try:
+                        crop = proc[y1b:y2b, x1:x2]
+                        ocr_results = self.ocr.recognize(crop, min_confidence=0.5)
+                        extracted = self._extract_quantity_from_ocr(
+                            ocr_results, min_conf=0.5
+                        )
+                    except Exception as e:
+                        self._log(
+                            f"数量框 OCR 识别异常 box_x=[{x1:.0f},{x2:.0f}]: {e}"
+                        )
+                        extracted = None
+
+                    if extracted is None:
+                        # 记录原始 OCR 文本，便于分析误过滤
+                        raw_texts = [f"'{text}'({conf:.2f})" for _, (text, conf) in ocr_results]
+                        self._log(
+                            f"数量框过滤: box_x=[{x1:.0f},{x2:.0f}] "
+                            f"det_conf={det_conf:.2f} 未识别到数字 "
+                            f"raw_ocr={raw_texts}"
+                        )
+                        continue
+
+                    qty, rec_conf, raw_text = extracted
+                    self._log(
+                        f"数量框保留: box_x=[{x1:.0f},{x2:.0f}] "
+                        f"det_conf={det_conf:.2f} OCR='{raw_text}' "
+                        f"qty={qty} rec_conf={rec_conf:.2f}"
+                    )
+                    all_boxes.append((bbox, center_x))
+                    if debug_canvas is not None:
+                        pts = np.array(bbox, dtype=np.int32).reshape((-1, 1, 2))
+                        cv2.polylines(debug_canvas, [pts], True, (0, 255, 0), 1)
+
+        # 按 center_x 距离合并相近的框
         bucket_w = max(10, window_width / 36)
         merge_threshold = bucket_w / 2
 
-        candidates = []
-        for bbox, digits, conf, _invert in all_lines:
-            try:
-                qty = int(digits)
-            except ValueError:
-                continue
-            # 数量角标一般为 1~2 位数字，3 位及以上视为 OCR 误识别（如 UI 噪点）
-            if qty >= 100:
-                self._log(f"数量条 OCR 忽略疑似误识别: {qty} (置信度={conf:.2f})")
-                continue
-            xs = [p[0] for p in bbox]
-            ys = [p[1] for p in bbox]
-            center_x = sum(xs) / len(xs)
-            # 按 1600h 归一化尺寸过滤过小的 OCR 框
-            scale = window_height / 1600
-            w_norm = (max(xs) - min(xs)) / scale
-            h_norm = (max(ys) - min(ys)) / scale
-            if (
-                w_norm < self._QUANTITY_MIN_W_PX_1600
-                or h_norm < self._QUANTITY_MIN_H_PX_1600
-            ):
-                self._log(
-                    f"数量条 OCR 忽略过小框: {qty} "
-                    f"(w={w_norm:.1f}, h={h_norm:.1f}, conf={conf:.2f})"
-                )
-                continue
-            candidates.append((bbox, center_x, qty, conf))
-        candidates.sort(key=lambda x: x[1])
-
-        merged: List[Tuple[List, float, int, float]] = []
-        for bbox, center_x, qty, conf in candidates:
+        merged: List[Tuple[List, float]] = []
+        for bbox, center_x in all_boxes:
             found = False
-            for i, (_mbbox, mcenter_x, _mqty, mconf) in enumerate(merged):
+            for i, (_mbbox, mcenter_x) in enumerate(merged):
                 if abs(center_x - mcenter_x) < merge_threshold:
-                    if conf > mconf:
-                        merged[i] = (bbox, center_x, qty, conf)
                     found = True
                     break
             if not found:
-                merged.append((bbox, center_x, qty, conf))
+                merged.append((bbox, center_x))
 
         boxes = sorted(merged, key=lambda x: x[1])
 
         if self.debug:
             self._quantity_strip_debug_counter += 1
-            for invert, canvas in debug_canvases.items():
+            tag = "yolo" if use_yolo else "paddle"
+            if debug_canvas is not None:
                 try:
-                    for bbox, (text, conf) in per_path_lines[invert]:
-                        digits = "".join(c for c in text if c.isdigit())
-                        if not digits:
-                            continue
-                        pts = np.array(bbox, dtype=np.int32).reshape((-1, 1, 2))
-                        cv2.polylines(canvas, [pts], True, (0, 255, 0), 1)
-                        x = int(bbox[0][0])
-                        y = max(10, int(bbox[0][1]) - 2)
-                        cv2.putText(
-                            canvas,
-                            f"{digits}({conf:.2f})",
-                            (max(0, x), y),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.4,
-                            (0, 0, 255),
-                            1,
-                            cv2.LINE_AA,
-                        )
-                    tag = "inv" if invert else "fix"
                     self._save_ocr_debug(
-                        canvas,
+                        debug_canvas,
                         f"quantity_strip_{self._quantity_strip_debug_counter:04d}_{tag}",
-                        value=len(per_path_lines[invert]) if per_path_lines[invert] else None,
+                        value=len(all_boxes),
                     )
                 except Exception as e:
-                    self._log(f"保存数量条调试图失败 (invert={invert}): {e}")
+                    self._log(f"保存数量条调试图失败 ({tag}): {e}")
 
             # 保存合并后的最终结果
-            if debug_canvases:
+            if debug_canvas is not None:
                 try:
-                    merged_canvas = next(iter(debug_canvases.values())).copy()
-                    for bbox, _center_x, qty, conf in boxes:
+                    merged_canvas = debug_canvas.copy()
+                    for bbox, _center_x in boxes:
                         pts = np.array(bbox, dtype=np.int32).reshape((-1, 1, 2))
-                        cv2.polylines(merged_canvas, [pts], True, (0, 255, 0), 1)
-                        x = int(bbox[0][0])
-                        y = max(10, int(bbox[0][1]) - 2)
-                        cv2.putText(
-                            merged_canvas,
-                            f"{qty}({conf:.2f})",
-                            (max(0, x), y),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.4,
-                            (0, 0, 255),
-                            1,
-                            cv2.LINE_AA,
-                        )
+                        cv2.polylines(merged_canvas, [pts], True, (0, 0, 255), 1)
                     self._save_ocr_debug(
                         merged_canvas,
                         f"quantity_strip_{self._quantity_strip_debug_counter:04d}_merged",
-                        value=len(boxes) if boxes else None,
+                        value=len(boxes),
                     )
                 except Exception as e:
                     self._log(f"保存数量条合并调试图失败: {e}")
@@ -705,74 +1174,83 @@ class OfflineResolver:
 
     def _assign_quantity_boxes(
         self,
-        boxes: List[Tuple[List, float, int, float]],
+        boxes: List[Tuple[List, float]],
         total_slots: int,
         window_width: int,
-    ) -> Dict[int, int]:
-        """根据 bbox 与每个 slot 数量 ROI 的重叠，把数量框分配到 slot_index。
+        active_slot: Optional[int] = None,
+    ) -> Set[int]:
+        """根据 bbox 与每个 slot 数量 ROI 的重叠，把数量框映射为候选 slot_index。
 
-        数量角标位于 slot 右下角，可能跨越 slot 边界，因此用重叠宽度比中心点
-        更稳定。
+        优先使用 data/quantity_roi_config_total{total_slots}.json 中的标定 x 范围；
+        无标定时回退到均匀槽宽估算。
+        只返回可能存在数量的 slot 集合，具体数值由调用方用标定 ROI + X_num_model 读取。
         """
-        result: Dict[int, int] = {}
-        best_conf: Dict[int, float] = {}
+        result: Set[int] = set()
+        calibrated = self._get_quantity_roi_xranges(total_slots, active_slot=active_slot)
+        use_calibration = calibrated is not None and len(calibrated) >= total_slots
+        if use_calibration:
+            self._log("  数量框分配使用标定 ROI")
         cell_w = window_width / 12 if total_slots <= 12 else window_width / total_slots
-        for bbox, _center_x, qty, conf in boxes:
+        for bbox, _center_x in boxes:
             xs = [p[0] for p in bbox]
             box_x1, box_x2 = min(xs), max(xs)
             best_idx = -1
             best_overlap = 0.0
             for i in range(total_slots):
-                # slot i 的数量 ROI：slot 中心线到右边界
-                x1_i = window_width - cell_w * (i + 0.5)
-                x2_i = window_width - cell_w * i
+                if use_calibration and i in calibrated:
+                    x1_ratio, x2_ratio = calibrated[i]
+                    x1_i = window_width * x1_ratio
+                    x2_i = window_width * x2_ratio
+                else:
+                    # slot i 的数量 ROI：slot 中心线到右边界
+                    x1_i = window_width - cell_w * (i + 0.5)
+                    x2_i = window_width - cell_w * i
                 overlap = max(0.0, min(box_x2, x2_i) - max(box_x1, x1_i))
                 if overlap > best_overlap:
                     best_overlap = overlap
                     best_idx = i
             if best_idx < 0:
+                self._log(
+                    f"  数量框分配忽略: box_x=[{box_x1:.0f},{box_x2:.0f}] 无重叠 slot"
+                )
                 continue
             self._log(
-                f"  数量框分配: box_x=[{box_x1:.0f},{box_x2:.0f}] -> slot[{best_idx}] "
-                f"qty={qty} conf={conf:.2f}"
+                f"  数量框分配: box_x=[{box_x1:.0f},{box_x2:.0f}] -> slot[{best_idx}]"
             )
-            if best_idx not in result or conf > best_conf.get(best_idx, 0.0):
-                result[best_idx] = qty
-                best_conf[best_idx] = conf
+            result.add(best_idx)
         return result
 
     def _parse_quantity_strip(
         self,
         bar_img: np.ndarray,
         total_slots: int,
-        boxes: Optional[List[Tuple[List, float, int, float]]] = None,
+        boxes: Optional[List[Tuple[List, float]]] = None,
         active_slot: Optional[int] = None,
     ) -> Dict[int, int]:
         """对数量条 OCR，返回 slot_index -> quantity。
 
-        先用全宽数量条检测确定哪些 slot 可能存在数量，再对这些 slot 单独裁剪 ROI
-        做一次精确 OCR，优先使用单独 OCR 的结果，未识别到时回退到全宽分配结果。
+        先用全宽数量条检测确定哪些 slot 可能存在数量，再对这些 slot 用标定 ROI
+        单独裁剪，走 X_num_model 读取具体数值。
         """
-        if self.ocr is None or bar_img.size == 0:
+        t0 = time.perf_counter()
+        if bar_img.size == 0:
             return {}
         window_width, _ = self._recover_window_size_from_bar(bar_img)
         if boxes is None:
             boxes = self._ocr_quantity_boxes(bar_img)
-        candidate_quantities = self._assign_quantity_boxes(boxes, total_slots, window_width)
+        self._log(f"[耗时] _ocr_quantity_boxes: {(time.perf_counter()-t0)*1000:.1f}ms")
+        t1 = time.perf_counter()
+        candidate_slots = self._assign_quantity_boxes(boxes, total_slots, window_width, active_slot=active_slot)
 
         final_quantities: Dict[int, int] = {}
-        for slot_idx, fallback_qty in candidate_quantities.items():
+        for slot_idx in candidate_slots:
             refined = self._recognize_quantity_from_bar_img(
                 bar_img, slot_idx, total_slots, active_slot=active_slot
             )
             if refined is not None and 0 < refined < 100:
                 final_quantities[slot_idx] = refined
-                self._log(
-                    f"  quantity slot={slot_idx}: 全宽={fallback_qty}, "
-                    f"单独OCR={refined}，采用单独OCR"
-                )
-            else:
-                final_quantities[slot_idx] = fallback_qty
+                self._log(f"  quantity slot={slot_idx}: 标定ROI模型={refined}")
+        self._log(f"[耗时] _recognize_quantity per-slot: {(time.perf_counter()-t1)*1000:.1f}ms")
         return final_quantities
 
     def _infer_total_from_quantity(
@@ -781,7 +1259,7 @@ class OfflineResolver:
         prev_total: int,
         prev_qty_count: int,
         action_delta_ops: int = 0,
-    ) -> Tuple[int, List[Tuple[List, float, int, float]]]:
+    ) -> Tuple[int, List[Tuple[List, float]]]:
         """根据数量条变化推断当前总槽位数，并返回识别到的数量框供后续复用。
 
         思路：数量框个数 = 道具槽 + 召唤物槽。前后数量框个数的变化即道具/召唤物槽的变化；
@@ -789,9 +1267,14 @@ class OfflineResolver:
           total = prev_total + action_delta_ops + (cur_qty_count - prev_qty_count)
         其中 action_delta_ops: 部署干员=-1，撤退干员=+1，道具/召唤物部署=0。
         """
-        if self.ocr is None or bar_img.size == 0:
+        if bar_img.size == 0:
             return max(1, prev_total + action_delta_ops), []
+        t_detect = time.perf_counter()
         boxes = self._ocr_quantity_boxes(bar_img)
+        self._log(
+            f"[耗时] _ocr_quantity_boxes (infer_total): "
+            f"{(time.perf_counter() - t_detect) * 1000:.1f}ms, boxes={len(boxes)}"
+        )
         cur_qty_count = len(boxes)
         delta_qty = cur_qty_count - prev_qty_count
         total = max(1, prev_total + action_delta_ops + delta_qty)
@@ -839,14 +1322,14 @@ class OfflineResolver:
     ) -> int:
         """计算头像裁剪所需的垂直位移。
 
-        total_slots <= 12 时，active slot 整体偏高约 15px；
-        total_slots > 12 时，active slot 的形变由 _crop_slot_avatar 统一按标定工具的
-        _ACTIVE_SELF_Y_SHIFT_PX 处理，本函数不再重复计算。
+        total_slots <= 12 时，active slot 整体偏高 _ACTIVE_SELF_Y_SHIFT_PX 像素；
+        total_slots > 12 时，active slot 的形变由 _crop_slot_avatar 统一按标定工具规则
+        处理，本函数不再重复计算。
         """
         if active_slot is None or bar_index != active_slot:
             return 0
         if total_slots <= 12:
-            return -15
+            return -self._ACTIVE_SELF_Y_SHIFT_PX
         return 0
 
     def _ocr_slot_cost(
@@ -857,41 +1340,66 @@ class OfflineResolver:
         y_shift: int = 0,
         active_slot: Optional[int] = None,
     ) -> Optional[int]:
-        """对指定 slot 裁剪费用 ROI 并 OCR。"""
+        """对指定 slot 裁剪费用 ROI 并识别。优先使用 ONNX 数字模型。"""
+        t_total = time.perf_counter()
         cache_key = (id(bar_img), bar_index, total_slots, y_shift, active_slot)
         if cache_key in self._ocr_cost_cache:
             return self._ocr_cost_cache[cache_key]
-        if self.ocr is None:
-            self._ocr_cost_cache[cache_key] = None
-            return None
+
+        t_crop = time.perf_counter()
         cost_crop = self._crop_cost_from_bar(
             bar_img, bar_index, total_slots, y_shift=y_shift, active_slot=active_slot
         )
+        self._log(f"[耗时] cost crop slot={bar_index}: {(time.perf_counter()-t_crop)*1000:.2f}ms")
         if cost_crop is None or cost_crop.size == 0:
             self._ocr_cost_cache[cache_key] = None
             return None
 
         result = None
-        for preprocess_name, preprocess in (
-            ("固定阈值", cost_recognition.preprocess_cost_image),
-            ("反色", cost_recognition.preprocess_cost_image_inv),
-        ):
+
+        # 1) 优先走 ONNX 数字模型（黑字白底）
+        if self._digit_recognizer is not None:
             try:
-                proc = preprocess(cost_crop)
-                result = cost_recognition.extract_cost_with_conf(
-                    self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
-                )
-                if result:
-                    self._log(
-                        f"  OCR cost slot={bar_index}: {result[0]} "
-                        f"(conf={result[1]:.2f}, 方式={preprocess_name})"
-                    )
-                    break
+                t_pre = time.perf_counter()
+                proc_inv = cost_recognition.preprocess_cost_image_inv(cost_crop)
+                self._log(f"[耗时] cost preprocess slot={bar_index}: {(time.perf_counter()-t_pre)*1000:.2f}ms")
+                t0 = time.perf_counter()
+                model_result = self._digit_recognizer.predict_cost(proc_inv)
+                model_ms = (time.perf_counter() - t0) * 1000
+                if model_result:
+                    value, conf = model_result
+                    if 0 <= value <= 99:
+                        self._log(
+                            f"  OCR cost slot={bar_index}: 模型={value} "
+                            f"(conf={conf:.2f}, 耗时={model_ms:.2f}ms)"
+                        )
+                        result = (value, conf)
             except Exception as e:
-                self._log(f"  OCR cost slot={bar_index} 异常 ({preprocess_name}): {e}")
-                continue
+                self._log(f"  OCR cost slot={bar_index} 模型异常: {e}")
+
+        # 2) 模型失败则 fallback 到 OCR 双路
+        if result is None and self.ocr is not None:
+            for preprocess_name, preprocess in (
+                ("固定阈值", cost_recognition.preprocess_cost_image),
+                ("反色", cost_recognition.preprocess_cost_image_inv),
+            ):
+                try:
+                    proc = preprocess(cost_crop)
+                    result = cost_recognition.extract_cost_with_conf(
+                        self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
+                    )
+                    if result:
+                        self._log(
+                            f"  OCR cost slot={bar_index}: {result[0]} "
+                            f"(conf={result[1]:.2f}, 方式={preprocess_name})"
+                        )
+                        break
+                except Exception as e:
+                    self._log(f"  OCR cost slot={bar_index} 异常 ({preprocess_name}): {e}")
+                    continue
 
         if self.debug:
+            t_save = time.perf_counter()
             shift_tag = f"_shift{y_shift}" if y_shift else ""
             self._save_ocr_debug(
                 cost_crop,
@@ -899,9 +1407,11 @@ class OfflineResolver:
                 value=result[0] if result else None,
                 conf=result[1] if result else None,
             )
+            self._log(f"[耗时] cost save debug slot={bar_index}: {(time.perf_counter()-t_save)*1000:.2f}ms")
 
         value = result[0] if result else None
         self._ocr_cost_cache[cache_key] = value
+        self._log(f"[耗时] cost slot={bar_index} total: {(time.perf_counter()-t_total)*1000:.2f}ms")
         return value
 
     def _parse_bar_state(
@@ -916,22 +1426,47 @@ class OfflineResolver:
 
         召唤物不再做跨帧模板匹配，而是分配唯一 obs_id，最后统一聚类。
         """
+        t_parse_qty = time.perf_counter()
         if quantities is None:
             quantities = self._parse_quantity_strip(
                 bar_img, total_slots, active_slot=active_slot
             )
+        self._log(f"[耗时] _parse_quantity_strip: {(time.perf_counter()-t_parse_qty)*1000:.1f}ms")
+        t_avatar = time.perf_counter()
+        infinite_slot_map = self._build_infinite_slot_map()
+        item_region_size = self._remaining_item_count + len(infinite_slot_map)
         states: List[_SlotState] = []
         for i in range(total_slots):
             qty = quantities.get(i)
             y_shift = self._compute_avatar_y_shift(bar_img, i, total_slots, active_slot)
-            if qty is not None:
-                if i < self._remaining_item_count:
-                    name = self._item_name_for_bar_index(i)
+            if i in infinite_slot_map:
+                item = infinite_slot_map[i]
+                avatar = self._crop_slot_avatar(
+                    bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
+                )
+                states.append(
+                    _SlotState(
+                        name=item.name,
+                        is_infinite=True,
+                        is_summon=True,
+                        original_bar_index=item.original_bar_index,
+                        cost=item.expected_cost,
+                        avatar=avatar,
+                    )
+                )
+            elif qty is not None:
+                if i < item_region_size:
+                    name = self._item_name_at_current_index(i)
                     avatar = self._crop_slot_avatar(
                         bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
                     )
                     states.append(
-                        _SlotState(name=name, is_item=True, quantity=qty, avatar=avatar)
+                        _SlotState(
+                            name=name,
+                            is_item=True,
+                            quantity=qty,
+                            avatar=avatar,
+                        )
                     )
                     self._item_initial_quantity[name] = max(
                         self._item_initial_quantity.get(name, 0), qty
@@ -946,11 +1481,6 @@ class OfflineResolver:
                     cost = self._ocr_slot_cost(
                         bar_img, i, total_slots, active_slot=active_slot
                     )
-                    shifted_cost = self._ocr_slot_cost(
-                        bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
-                    )
-                    if shifted_cost is not None:
-                        cost = shifted_cost
                     if cost is not None:
                         self._summon_costs[obs_id] = cost
                     self._register_summon_obs(
@@ -965,6 +1495,16 @@ class OfflineResolver:
                             avatar=shifted_avatar,
                         )
                     )
+            elif i < item_region_size:
+                # 道具区 slot 但数量 OCR 失败，仍按道具处理
+                name = self._item_name_at_current_index(i)
+                avatar = self._crop_slot_avatar(
+                    bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
+                )
+                states.append(
+                    _SlotState(name=name, is_item=True, avatar=avatar)
+                )
+                self._item_bar_index[name] = i
             else:
                 avatar = self._crop_slot_avatar(
                     bar_img, i, total_slots, y_shift=y_shift
@@ -980,6 +1520,7 @@ class OfflineResolver:
                     if avatar is not None:
                         self._templates[name] = avatar
                 states.append(_SlotState(name=name, avatar=avatar))
+        self._log(f"[耗时] _parse_bar_state avatar loop({total_slots} slots): {(time.perf_counter()-t_avatar)*1000:.1f}ms")
         return states
 
     def _parse_bar_state_aligned(
@@ -1012,13 +1553,30 @@ class OfflineResolver:
             deployed_name = prev_state[deployed_bar_index].name
         op_iter = iter([s for s in prev_ops if s.name != deployed_name])
 
+        infinite_slot_map = self._build_infinite_slot_map()
+        item_region_size = self._remaining_item_count + len(infinite_slot_map)
         states: List[_SlotState] = []
         for i in range(total_slots):
             qty = quantities.get(i)
             y_shift = self._compute_avatar_y_shift(bar_img, i, total_slots, active_slot)
-            if qty is not None:
-                if i < self._remaining_item_count:
-                    name = self._aligned_item_name(i, prev_state)
+            if i in infinite_slot_map:
+                item = infinite_slot_map[i]
+                avatar = self._crop_slot_avatar(
+                    bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
+                )
+                states.append(
+                    _SlotState(
+                        name=item.name,
+                        is_infinite=True,
+                        is_summon=True,
+                        original_bar_index=item.original_bar_index,
+                        cost=item.expected_cost,
+                        avatar=avatar,
+                    )
+                )
+            elif qty is not None:
+                if i < item_region_size:
+                    name = self._item_name_at_current_index(i)
                     avatar = self._crop_slot_avatar(
                         bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
                     )
@@ -1038,11 +1596,6 @@ class OfflineResolver:
                     cost = self._ocr_slot_cost(
                         bar_img, i, total_slots, active_slot=active_slot
                     )
-                    shifted_cost = self._ocr_slot_cost(
-                        bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
-                    )
-                    if shifted_cost is not None:
-                        cost = shifted_cost
                     if cost is not None:
                         self._summon_costs[obs_id] = cost
                     self._register_summon_obs(
@@ -1057,6 +1610,14 @@ class OfflineResolver:
                             avatar=shifted_avatar,
                         )
                     )
+            elif i < item_region_size:
+                # 道具区 slot 但数量 OCR 失败，仍按道具处理
+                name = self._item_name_at_current_index(i)
+                avatar = self._crop_slot_avatar(
+                    bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
+                )
+                states.append(_SlotState(name=name, is_item=True, avatar=avatar))
+                self._item_bar_index[name] = i
             else:
                 op = next(op_iter, None)
                 if op is not None:
@@ -1138,8 +1699,8 @@ class OfflineResolver:
             self._log(f"DEPLOY @ {raw.time_ms} 无法解析点击位置，跳过")
             return
 
-        # 无 pre-deploy 图或 OCR 不可用时，按纯逻辑推导
-        if bar_img is None or self.ocr is None:
+        # 无 pre-deploy 图时，按纯逻辑推导；数量检测现在优先走 YOLO，不再强制要求 OCR
+        if bar_img is None:
             initial_total = self.raw.initial_operator_count + self.raw.initial_item_count
             fallback_bar_index = 0
             if initial_total > 0:
@@ -1147,11 +1708,33 @@ class OfflineResolver:
                     0, min(initial_total - 1, int(round(click_ratio * initial_total - 0.5)))
                 )
             self._fallback_deploy(raw, fallback_bar_index)
-            self._log(f"DEPLOY @ {raw.time_ms} 无 pre-deploy 图/OCR，兜底耗时={(time.perf_counter()-t0)*1000:.1f}ms")
+            self._log(f"DEPLOY @ {raw.time_ms} 无 pre-deploy 图，兜底耗时={(time.perf_counter()-t0)*1000:.1f}ms")
             return
 
         prev_total = len(prev)
-        prev_qty_count = sum(1 for s in prev if s.quantity is not None)
+        prev_qty_count = self._remaining_item_count + sum(
+            1 for s in prev if s.is_summon and s.quantity is not None
+        )
+
+        # 0. 更新无限道具在场状态（在推断 total 前，确保 prev_total 正确）
+        # 对任意总槽位数都需要先算出 active_slot，因为 total<=12 时被拖拽 slot
+        # 的费用/数量 ROI 仍需向上偏移 _ACTIVE_SELF_Y_SHIFT_PX。
+        t_inf = time.perf_counter()
+        window_width, _ = self._recover_window_size_from_bar(bar_img)
+        click_offset_from_right = click_ratio * window_width
+        preliminary_active = self._nearest_slot_index(
+            click_offset_from_right, prev_total, bar_img
+        )
+        self._update_infinite_items_presence(
+            bar_img, raw.time_ms, active_slot=preliminary_active
+        )
+        # 状态可能已重建，重新取 prev
+        prev = self._prev_bar_state
+        prev_total = len(prev)
+        prev_qty_count = self._remaining_item_count + sum(
+            1 for s in prev if s.is_summon and s.quantity is not None
+        )
+        self._log(f"  [耗时] 更新无限道具状态: {(time.perf_counter()-t_inf)*1000:.1f}ms")
 
         # 1. 推断 pre-deploy 实际总槽位（action_delta_ops=0，因为尚未部署）
         t_infer = time.perf_counter()
@@ -1402,6 +1985,13 @@ class OfflineResolver:
                     else:
                         self._remaining_item_count = max(0, self._remaining_item_count - 1)
                         self._log(f"道具 {slot.name} 耗尽，剩余道具 slot -> {self._remaining_item_count}")
+                elif slot.is_infinite:
+                    # 无限道具部署后离场，等待下次返回
+                    if slot.original_bar_index is not None:
+                        item = self._infinite_items.get(slot.original_bar_index)
+                        if item is not None:
+                            item.present = False
+                            self._log(f"无限道具 {item.name} 部署后离场")
                 elif slot.is_summon:
                     new_qty = (slot.quantity or 1) - 1
                     if new_qty > 0:
@@ -1490,12 +2080,10 @@ class OfflineResolver:
         视觉从左到右：低费用干员/召唤物 → 高费用干员/召唤物 → 助战干员 → 道具。
         内部列表为从右到左（index 0 对应最右侧）。
         """
-        items = [s for s in self._prev_bar_state if s.is_item]
-        non_items = [s for s in self._prev_bar_state if not s.is_item]
+        items = [s for s in self._prev_bar_state if s.is_item or s.is_infinite]
+        non_items = [s for s in self._prev_bar_state if not s.is_item and not s.is_infinite]
 
-        support_names = set()
-        if self._support_count > 0 and self._operators:
-            support_names = set(self._operators[-self._support_count :])
+        support_names = self._support_operator_names()
 
         def _cost(slot: _SlotState) -> int:
             if slot.cost is not None:
@@ -1666,33 +2254,52 @@ class OfflineResolver:
         bar_index: int,
         total_slots: int,
     ) -> Optional[int]:
-        """从给定的整栏图片中识别指定 slot 的费用。"""
+        """从给定的整栏图片中识别指定 slot 的费用。优先使用 ONNX 数字模型。"""
         cost_crop = self._crop_cost_from_bar(bar_img, bar_index, total_slots)
         if cost_crop is None or cost_crop.size == 0:
             self._log(f"  初始部署区 cost slot={bar_index}: ROI 裁剪为空")
             return None
 
         result = None
-        for preprocess_name, preprocess in (
-            ("固定阈值", cost_recognition.preprocess_cost_image),
-            ("反色", cost_recognition.preprocess_cost_image_inv),
-        ):
-            try:
-                proc = preprocess(cost_crop)
-                result = cost_recognition.extract_cost_with_conf(
-                    self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
-                )
-                if result:
+        # 1) 优先走 ONNX 数字模型（黑字白底）
+        try:
+            proc_inv = cost_recognition.preprocess_cost_image_inv(cost_crop)
+            t0 = time.perf_counter()
+            model_result = self._digit_recognizer.predict_cost(proc_inv)
+            model_ms = (time.perf_counter() - t0) * 1000
+            if model_result:
+                value, conf = model_result
+                if 0 <= value <= 99:
                     self._log(
-                        f"  初始部署区 cost slot={bar_index}: {result[0]} "
-                        f"(conf={result[1]:.2f}, 方式={preprocess_name})"
+                        f"  初始部署区 cost slot={bar_index}: 模型={value} "
+                        f"(conf={conf:.2f}, 耗时={model_ms:.2f}ms)"
                     )
-                    break
-                else:
-                    self._log(f"  初始部署区 cost slot={bar_index}: 方式={preprocess_name} 未识别到数字")
-            except Exception as e:
-                self._log(f"  初始部署区 cost slot={bar_index} 异常 ({preprocess_name}): {e}")
-                continue
+                    result = (value, conf)
+        except Exception as e:
+            self._log(f"  初始部署区 cost slot={bar_index} 模型异常: {e}")
+
+        # 2) 模型失败则 fallback 到 OCR 双路
+        if result is None:
+            for preprocess_name, preprocess in (
+                ("固定阈值", cost_recognition.preprocess_cost_image),
+                ("反色", cost_recognition.preprocess_cost_image_inv),
+            ):
+                try:
+                    proc = preprocess(cost_crop)
+                    result = cost_recognition.extract_cost_with_conf(
+                        self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
+                    )
+                    if result:
+                        self._log(
+                            f"  初始部署区 cost slot={bar_index}: {result[0]} "
+                            f"(conf={result[1]:.2f}, 方式={preprocess_name})"
+                        )
+                        break
+                    else:
+                        self._log(f"  初始部署区 cost slot={bar_index}: 方式={preprocess_name} 未识别到数字")
+                except Exception as e:
+                    self._log(f"  初始部署区 cost slot={bar_index} 异常 ({preprocess_name}): {e}")
+                    continue
 
         if self.debug:
             self._save_ocr_debug(
@@ -1711,9 +2318,9 @@ class OfflineResolver:
         total_slots: int,
         active_slot: Optional[int] = None,
     ) -> Optional[int]:
-        """从给定的整栏图片中识别指定 slot 头像右下角的数量。仅使用高阈值反色预处理。"""
-        # total_slots <= 12 时，active slot 的数量角标位置整体偏高约 15px
-        y_shift = -15 if (
+        """从给定的整栏图片中识别指定 slot 头像右下角的数量。优先使用 ONNX 数字模型。"""
+        # total_slots <= 12 时，active slot 的数量角标位置整体偏高 _ACTIVE_SELF_Y_SHIFT_PX 像素
+        y_shift = -self._ACTIVE_SELF_Y_SHIFT_PX if (
             active_slot is not None
             and bar_index == active_slot
             and total_slots <= 12
@@ -1727,27 +2334,59 @@ class OfflineResolver:
 
         result = None
         raw_text = ""
+        proc = None
         try:
             proc = self._preprocess_quantity_strip(
                 cv2.resize(qty_crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC),
                 invert=True,
             )
-            lines = self.ocr.recognize(proc, min_confidence=0.5)
-            extracted = self._extract_quantity_from_ocr(lines, min_conf=0.5)
-            if extracted:
-                result = (extracted[0], extracted[1])
-                raw_text = extracted[2]
-                self._log(
-                    f"  初始部署区 quantity slot={bar_index}: {result[0]} "
-                    f"(conf={result[1]:.2f}, 原始='{raw_text}')"
-                )
         except Exception as e:
-            self._log(f"  初始部署区 quantity slot={bar_index} 异常: {e}")
+            self._log(f"  初始部署区 quantity slot={bar_index} 预处理异常: {e}")
+            proc = None
+
+        # 1) 优先走 ONNX 数字模型
+        if proc is not None:
+            if self.debug:
+                self._quantity_slot_debug_counter += 1
+                self._save_ocr_debug(
+                    proc,
+                    f"qty_initial_onnx_input_{bar_index}_{self._quantity_slot_debug_counter:04d}",
+                )
+            try:
+                t0 = time.perf_counter()
+                model_result = self._digit_recognizer.predict_quantity(proc)
+                model_ms = (time.perf_counter() - t0) * 1000
+                if model_result:
+                    value, conf = model_result
+                    if 0 <= value <= 30:
+                        result = (value, conf)
+                        self._log(
+                            f"  初始部署区 quantity slot={bar_index}: 模型={value} "
+                            f"(conf={conf:.2f}, 耗时={model_ms:.2f}ms)"
+                        )
+            except Exception as e:
+                self._log(f"  初始部署区 quantity slot={bar_index} 模型异常: {e}")
+
+        # 2) 模型失败则 fallback 到 OCR
+        if result is None and proc is not None and self.ocr is not None:
+            try:
+                lines = self.ocr.recognize(proc, min_confidence=0.5)
+                extracted = self._extract_quantity_from_ocr(lines, min_conf=0.5)
+                if extracted:
+                    result = (extracted[0], extracted[1])
+                    raw_text = extracted[2]
+                    self._log(
+                        f"  初始部署区 quantity slot={bar_index}: {result[0]} "
+                        f"(conf={result[1]:.2f}, 原始='{raw_text}')"
+                    )
+            except Exception as e:
+                self._log(f"  初始部署区 quantity slot={bar_index} OCR 异常: {e}")
 
         if self.debug:
+            self._quantity_slot_debug_counter += 1
             self._save_ocr_debug(
                 qty_crop,
-                f"team_qty_slot_{bar_index}",
+                f"team_qty_slot_{bar_index}_{self._quantity_slot_debug_counter:04d}",
                 value=result[0] if result else None,
                 conf=result[1] if result else None,
             )
@@ -2181,6 +2820,7 @@ class OfflineResolver:
                 screenshot_info.raw,
                 inference.screenshot_bar_index,
                 inference.screenshot_total,
+                active_slot=inference.screenshot_bar_index,
             )
             if qty is None or qty <= 0:
                 continue
@@ -2758,6 +3398,14 @@ class OfflineResolver:
             count = self._summon_deploy_counts.get(obs_id, 0)
             new_counts[final_name] = new_counts.get(final_name, 0) + count
 
+        # 保留非 obs_id 来源的召唤物条目（如无限道具），避免被聚类重写清空
+        for name, cost in self._summon_costs.items():
+            if name not in self._obs_id_to_final and name not in new_costs:
+                new_costs[name] = cost
+        for name, count in self._summon_deploy_counts.items():
+            if name not in self._obs_id_to_final and name not in new_counts:
+                new_counts[name] = count
+
         self._summon_costs = new_costs
         self._summon_deploy_counts = new_counts
 
@@ -3234,6 +3882,7 @@ class OfflineResolver:
 
         # 名称卡按部署时的临时名称收集：
         #   - 道具: __item_N__
+        #   - 无限道具: __infinite_item_N__
         #   - 召唤物（聚类前）: __summon_obs_N__，聚类后映射为 __unknown_N__
         #   - 兜底未知: __unknown_N__
         target_to_kf_ids: Dict[str, List[str]] = {}
@@ -3241,12 +3890,16 @@ class OfflineResolver:
             target_name = None
             if collected_name.startswith("__item_"):
                 target_name = collected_name
+            elif collected_name.startswith("__infinite_item_"):
+                target_name = collected_name
             elif collected_name.startswith("__summon_obs_"):
                 target_name = self._obs_id_to_final.get(collected_name)
             elif collected_name.startswith("__unknown_"):
                 target_name = collected_name
             if target_name and (
-                target_name.startswith("__item_") or target_name.startswith("__unknown_")
+                target_name.startswith("__item_")
+                or target_name.startswith("__infinite_item_")
+                or target_name.startswith("__unknown_")
             ):
                 target_to_kf_ids.setdefault(target_name, []).extend(kf_ids)
 
@@ -3298,6 +3951,11 @@ class OfflineResolver:
             if old_name in self._item_bar_index:
                 self._item_bar_index[new_name] = self._item_bar_index.pop(old_name)
 
+        # 重命名无限道具内部状态
+        for item in self._infinite_items.values():
+            if item.name in renames:
+                item.name = renames[item.name]
+
         # 重命名 actions 与场上部署映射
         for i, action in enumerate(self._actions):
             if action.operator_name in renames:
@@ -3326,7 +3984,7 @@ class OfflineResolver:
         total_slots: int,
         active_slot: Optional[int] = None,
     ) -> Optional[int]:
-        """识别指定 slot 的费用数字。"""
+        """识别指定 slot 的费用数字。优先使用 ONNX 数字模型。"""
         if self.ocr is None:
             self._log(f"  OCR cost slot={bar_index}: ocr 未初始化，跳过")
             return None
@@ -3342,26 +4000,45 @@ class OfflineResolver:
             return None
 
         result = None
-        for preprocess_name, preprocess in (
-            ("固定阈值", cost_recognition.preprocess_cost_image),
-            ("反色", cost_recognition.preprocess_cost_image_inv),
-        ):
-            try:
-                proc = preprocess(cost_crop)
-                result = cost_recognition.extract_cost_with_conf(
-                    self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
-                )
-                if result:
+        # 1) 优先走 ONNX 数字模型（黑字白底）
+        try:
+            proc_inv = cost_recognition.preprocess_cost_image_inv(cost_crop)
+            t0 = time.perf_counter()
+            model_result = self._digit_recognizer.predict_cost(proc_inv)
+            model_ms = (time.perf_counter() - t0) * 1000
+            if model_result:
+                value, conf = model_result
+                if 0 <= value <= 99:
                     self._log(
-                        f"  OCR cost slot={bar_index}: {result[0]} "
-                        f"(conf={result[1]:.2f}, 方式={preprocess_name})"
+                        f"  OCR cost slot={bar_index}: 模型={value} "
+                        f"(conf={conf:.2f}, 耗时={model_ms:.2f}ms)"
                     )
-                    break
-                else:
-                    self._log(f"  OCR cost slot={bar_index}: 方式={preprocess_name} 未识别到数字")
-            except Exception as e:
-                self._log(f"  OCR cost slot={bar_index} 异常 ({preprocess_name}): {e}")
-                continue
+                    result = (value, conf)
+        except Exception as e:
+            self._log(f"  OCR cost slot={bar_index} 模型异常: {e}")
+
+        # 2) 模型失败则 fallback 到 OCR 双路
+        if result is None:
+            for preprocess_name, preprocess in (
+                ("固定阈值", cost_recognition.preprocess_cost_image),
+                ("反色", cost_recognition.preprocess_cost_image_inv),
+            ):
+                try:
+                    proc = preprocess(cost_crop)
+                    result = cost_recognition.extract_cost_with_conf(
+                        self.ocr.recognize(proc, min_confidence=0.5), min_conf=0.5
+                    )
+                    if result:
+                        self._log(
+                            f"  OCR cost slot={bar_index}: {result[0]} "
+                            f"(conf={result[1]:.2f}, 方式={preprocess_name})"
+                        )
+                        break
+                    else:
+                        self._log(f"  OCR cost slot={bar_index}: 方式={preprocess_name} 未识别到数字")
+                except Exception as e:
+                    self._log(f"  OCR cost slot={bar_index} 异常 ({preprocess_name}): {e}")
+                    continue
 
         if self.debug:
             self._save_ocr_debug(
@@ -3380,7 +4057,7 @@ class OfflineResolver:
         total_slots: int,
         active_slot: Optional[int] = None,
     ) -> Optional[int]:
-        """识别召唤物/道具右下角的数量数字。仅使用高阈值反色预处理。"""
+        """识别召唤物/道具右下角的数量数字。优先使用 ONNX 数字模型。"""
         if self.ocr is None:
             self._log(f"  OCR quantity slot={bar_index}: ocr 未初始化，跳过")
             return None
@@ -3388,8 +4065,8 @@ class OfflineResolver:
         if bar_img is None:
             self._log(f"  OCR quantity slot={bar_index}: 未找到 DEPLOY_BAR 关键帧")
             return None
-        # total_slots <= 12 时，active slot 的数量角标位置整体偏高约 15px
-        y_shift = -15 if (
+        # total_slots <= 12 时，active slot 的数量角标位置整体偏高 _ACTIVE_SELF_Y_SHIFT_PX 像素
+        y_shift = -self._ACTIVE_SELF_Y_SHIFT_PX if (
             active_slot is not None
             and bar_index == active_slot
             and total_slots <= 12
@@ -3403,27 +4080,58 @@ class OfflineResolver:
 
         result = None
         raw_text = ""
+        proc = None
         try:
             proc = self._preprocess_quantity_strip(
                 cv2.resize(qty_crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC),
                 invert=True,
             )
-            lines = self.ocr.recognize(proc, min_confidence=0.5)
-            extracted = self._extract_quantity_from_ocr(lines, min_conf=0.5)
-            if extracted:
-                result = (extracted[0], extracted[1])
-                raw_text = extracted[2]
-                self._log(
-                    f"  OCR quantity slot={bar_index}: {result[0]} "
-                    f"(conf={result[1]:.2f}, 原始='{raw_text}')"
-                )
         except Exception as e:
-            self._log(f"  OCR quantity slot={bar_index} 异常: {e}")
+            self._log(f"  OCR quantity slot={bar_index} 预处理异常: {e}")
+
+        # 1) 优先走 ONNX 数字模型
+        if proc is not None:
+            if self.debug:
+                self._quantity_slot_debug_counter += 1
+                self._save_ocr_debug(
+                    proc,
+                    f"qty_onnx_input_{raw.time_ms:08d}_slot_{bar_index}_{self._quantity_slot_debug_counter:04d}",
+                )
+            try:
+                t0 = time.perf_counter()
+                model_result = self._digit_recognizer.predict_quantity(proc)
+                model_ms = (time.perf_counter() - t0) * 1000
+                if model_result:
+                    value, conf = model_result
+                    if 0 <= value <= 30:
+                        result = (value, conf)
+                        self._log(
+                            f"  OCR quantity slot={bar_index}: 模型={value} "
+                            f"(conf={conf:.2f}, 耗时={model_ms:.2f}ms)"
+                        )
+            except Exception as e:
+                self._log(f"  OCR quantity slot={bar_index} 模型异常: {e}")
+
+        # 2) 模型失败则 fallback 到 OCR
+        if result is None and proc is not None and self.ocr is not None:
+            try:
+                lines = self.ocr.recognize(proc, min_confidence=0.5)
+                extracted = self._extract_quantity_from_ocr(lines, min_conf=0.5)
+                if extracted:
+                    result = (extracted[0], extracted[1])
+                    raw_text = extracted[2]
+                    self._log(
+                        f"  OCR quantity slot={bar_index}: {result[0]} "
+                        f"(conf={result[1]:.2f}, 原始='{raw_text}')"
+                    )
+            except Exception as e:
+                self._log(f"  OCR quantity slot={bar_index} OCR 异常: {e}")
 
         if self.debug:
+            self._quantity_slot_debug_counter += 1
             self._save_ocr_debug(
                 qty_crop,
-                f"qty_{raw.time_ms:08d}_slot_{bar_index}",
+                f"qty_{raw.time_ms:08d}_slot_{bar_index}_{self._quantity_slot_debug_counter:04d}",
                 value=result[0] if result else None,
                 conf=result[1] if result else None,
             )
@@ -3439,6 +4147,44 @@ class OfflineResolver:
     ) -> Optional[int]:
         """道具数量 ROI 与召唤物相同：头像右下角 40x40。"""
         return self._recognize_quantity(raw, bar_index, total_slots, active_slot=active_slot)
+
+    def _read_quantity_crop(
+        self, crop: np.ndarray
+    ) -> Optional[Tuple[int, float, str]]:
+        """对单个数量角标裁剪图先走 ONNX 模型，失败再 OCR fallback。
+
+        返回 (quantity, confidence, source)，source 为 'model' 或 'ocr'。
+        """
+        if crop is None or crop.size == 0:
+            return None
+
+        # 1) ONNX 模型
+        try:
+            t0 = time.perf_counter()
+            model_result = self._digit_recognizer.predict_quantity(crop)
+            model_ms = (time.perf_counter() - t0) * 1000
+            if model_result:
+                value, conf = model_result
+                if 0 <= value <= 30:
+                    self._log(
+                        f"  数量框模型读数: {value} "
+                        f"(conf={conf:.2f}, 耗时={model_ms:.2f}ms)"
+                    )
+                    return value, conf, "model"
+        except Exception as e:
+            self._log(f"  数量框模型读数异常: {e}")
+
+        # 2) OCR fallback
+        if self.ocr is None:
+            return None
+        try:
+            lines = self.ocr.recognize(crop, min_confidence=0.5)
+            extracted = self._extract_quantity_from_ocr(lines, min_conf=0.5)
+            if extracted:
+                return extracted[0], extracted[1], "ocr"
+        except Exception as e:
+            self._log(f"  数量框 OCR fallback 异常: {e}")
+        return None
 
     def _crop_cost_from_bar(
         self,
@@ -3464,11 +4210,11 @@ class OfflineResolver:
         # 费用条在窗口坐标 y=1390, h=36；bar_img 顶部的窗口 y = 1390 - 20（上移 20px）
         cost_y_window = window_height * constants.DEPLOY_BAR_COST_ROI_RATIOS[1]
         cost_h_window = window_height * constants.DEPLOY_BAR_COST_ROI_RATIOS[3]
+        # 被拖拽的 active slot 整体向上偏移 _ACTIVE_SELF_Y_SHIFT_PX 像素，
+        # 该偏移对 total_slots <= 12 和 > 12 均生效（>12 时 X 方向另有标定修正）。
         active_self_shift = (
             self._ACTIVE_SELF_Y_SHIFT_PX
-            if active_slot is not None
-            and active_slot == bar_index
-            and total_slots > 12
+            if active_slot is not None and active_slot == bar_index
             else 0
         )
         y1 = int(round(cost_y_window - bar_top + y_shift - active_self_shift))
@@ -3652,12 +4398,16 @@ class OfflineResolver:
                     total_slots, active_slot, i
                 )
 
-            # active slot 自身形变：>12 槽时整体向上移动 25px
-            active_self_shift_px = (
-                self._ACTIVE_SELF_Y_SHIFT_PX
-                if active_slot is not None and active_slot == i and total_slots > 12
-                else 0
-            )
+            # active slot 自身形变：被拖拽的 slot 整体向上移动固定像素
+            # 注意：<=12 时头像偏移由 _compute_avatar_y_shift 负责，这里不再重复
+            active_self_shift_px = 0
+            cost_shift_px = 0
+            qty_shift_px = 0
+            if active_slot is not None and active_slot == i:
+                if total_slots > 12:
+                    active_self_shift_px = self._ACTIVE_SELF_Y_SHIFT_PX
+                cost_shift_px = self._ACTIVE_SELF_Y_SHIFT_PX
+                qty_shift_px = self._ACTIVE_SELF_Y_SHIFT_PX
 
             # 头像 ROI
             avatar_y_shift = self._compute_avatar_y_shift(
@@ -3698,7 +4448,7 @@ class OfflineResolver:
                 else:
                     ccx1 = int(round(cx))
                     ccx2 = min(w_bar, ccx1 + 53)
-            cy1 = int(round(cost_y_window - bar_top - active_self_shift_px))
+            cy1 = int(round(cost_y_window - bar_top - cost_shift_px))
             cy2 = int(round(cy1 + cost_h_window))
             cv2.rectangle(canvas, (ccx1, cy1), (ccx2, cy2), (0, 0, 255), thickness)
 
@@ -3725,7 +4475,7 @@ class OfflineResolver:
             else:
                 qx1 = int(round(cx))
                 qx2 = min(w_bar, qx1 + int(round(cell_w / 2)))
-                qy1 = int(round(window_height * self._QUANTITY_ROI_Y_RATIO - bar_top))
+                qy1 = int(round(window_height * self._QUANTITY_ROI_Y_RATIO - bar_top - qty_shift_px))
                 qy2 = min(h_bar, qy1 + int(round(window_height * self._QUANTITY_ROI_H_RATIO)))
             cv2.rectangle(canvas, (qx1, qy1), (qx2, qy2), (255, 0, 0), thickness)
 
@@ -3856,49 +4606,74 @@ class OfflineResolver:
     # 输出
     # ------------------------------------------------------------------
     def _build_script(self) -> ScriptModel:
+        # 补充用户填写的初始道具（即使未被使用），并按 OCR 数量/使用次数设置 charges。
+        # 如果某个 bar_index 已通过名称卡 OCR 得到真实名称，优先使用真实名称。
+        # 无限道具同时视为初始道具（charges=1）和召唤物（用于 ADD_SUMMON 生命周期）。
+        infinite_original_indices = set(self._infinite_items.keys())
+        bar_index_to_name = {idx: nm for nm, idx in self._item_bar_index.items()}
+        for bar_index in range(self._item_count_hint):
+            is_infinite = bar_index in infinite_original_indices
+            if is_infinite:
+                # 无限道具与 summons 列表共用 _infinite_items 中的名称
+                name = self._infinite_items[bar_index].name
+            else:
+                name = bar_index_to_name.get(bar_index) or self._item_name_for_bar_index(bar_index)
+            self._ensure_item(name)
+            self._item_bar_index[name] = bar_index
+            if is_infinite:
+                # 无限道具在 items 中只记录初始 1 个，后续通过 ADD_SUMMON 补充
+                for it in self._items:
+                    if it.name == name:
+                        it.charges = 1
+                        break
+            else:
+                usage = self._item_usage_counts.get(name, 0)
+                qty = self._item_initial_quantity.get(name)
+                for it in self._items:
+                    if it.name == name:
+                        it.charges = max(1, qty if qty is not None else usage)
+                        break
+
         # 道具按实际 bar_index 从右到左排序，确保 OperatorPool 布局与录制时一致
         self._items.sort(
             key=lambda it: self._item_bar_index.get(it.name, 0),
             reverse=True,
         )
 
-        # 补充用户填写的初始道具（即使未被使用），并按 OCR 数量/使用次数设置 charges。
-        # 如果某个 bar_index 已通过名称卡 OCR 得到真实名称，优先使用真实名称。
-        bar_index_to_name = {idx: nm for nm, idx in self._item_bar_index.items()}
-        for bar_index in range(self._item_count_hint):
-            name = bar_index_to_name.get(bar_index) or self._item_name_for_bar_index(bar_index)
-            self._ensure_item(name)
-            self._item_bar_index[name] = bar_index
-            usage = self._item_usage_counts.get(name, 0)
-            qty = self._item_initial_quantity.get(name)
-            for it in self._items:
-                if it.name == name:
-                    it.charges = max(1, qty if qty is not None else usage)
-                    break
-
         # 构建 summons 列表
+        infinite_names = {it.name for it in self._infinite_items.values()}
         for name in sorted(self._summon_deploy_counts.keys(), key=lambda n: self._summon_deploy_counts.get(n, 0)):
             cost = self._summon_costs.get(name, 0)
-            self._summons.append(SummonInfo(name=name, cost=cost))
+            # 无限道具已在 items 中作为初始道具，summons 中只注册不重复初始放置
+            initial_charges = 0
+            self._summons.append(SummonInfo(name=name, cost=cost, initial_charges=initial_charges))
 
-        # 干员按费用从低到高排序，助战干员保持在列表末尾，确保执行器回退到初始序号时仍与视觉布局一致
-        support_count = self._support_count
-        if support_count > 0 and len(self._operators) > support_count:
-            normal_names = self._operators[:-support_count]
-            support_names = self._operators[-support_count:]
+        # 干员直接按初始部署区头像解析出的视觉顺序回填（从左到右），
+        # 助战干员在初始布局中本就位于干员区域最右侧，因此自然在列表末尾。
+        if self._initial_operator_order:
+            seen = set()
+            ordered: List[str] = []
+            for name in self._initial_operator_order:
+                if name in self._operators and name not in seen:
+                    ordered.append(name)
+                    seen.add(name)
+            for name in self._operators:
+                if name not in seen:
+                    ordered.append(name)
+            self._operators = ordered
         else:
-            normal_names = self._operators
-            support_names = []
+            # 无初始顺序时回退：按费用排序，助战位于末尾
+            support_names = list(self._support_operator_names())
+            normal_names = [n for n in self._operators if n not in support_names]
 
-        def _operator_sort_key(name: str):
-            info = self._operator_info.get(name)
-            cost = info.cost if info is not None and info.cost is not None else 0
-            # 同费用时按初始部署栏的视觉位置从左到右排序（_operator_index 越大越靠左）
-            visual_index = self._operator_index.get(name, -1)
-            return (cost, -visual_index, name)
+            def _operator_sort_key(name: str):
+                info = self._operator_info.get(name)
+                cost = info.cost if info is not None and info.cost is not None else 0
+                visual_index = self._operator_index.get(name, -1)
+                return (cost, -visual_index, name)
 
-        normal_names.sort(key=_operator_sort_key)
-        self._operators = normal_names + support_names
+            normal_names.sort(key=_operator_sort_key)
+            self._operators = normal_names + support_names
 
         # 合并用户提示中的召唤物绑定（若存在）
         bindings: List[SummonBinding] = []
@@ -3912,7 +4687,6 @@ class OfflineResolver:
 
         script = ScriptModel(
             stage_code=self.raw.stage_code,
-            stage_name=self.raw.stage_name,
             grid_rows=self.raw.grid_rows,
             grid_cols=self.raw.grid_cols,
             operators=self._operators,

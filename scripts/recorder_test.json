@@ -1,232 +1,93 @@
 {
   "version": "1.0",
-  "stage_code": "14-8",
-  "stage_name": "14-8",
-  "grid_rows": 8,
-  "grid_cols": 12,
+  "stage_code": "AS-9",
+  "grid_rows": 9,
+  "grid_cols": 13,
   "operators": [
-    "德克萨斯",
-    "玛恩纳",
-    "艾拉",
-    "妮芙",
+    "伊内丝",
     "死芒",
-    "澄闪",
-    "隐德来希",
     "锏",
-    "维什戴尔",
-    "莫斯提马",
     "谬因",
-    "伊芙利特"
+    "菲亚梅塔"
   ],
   "items": [
     {
-      "name": "枯朽祭坛",
+      "name": "纯净结晶",
+      "charges": 10
+    },
+    {
+      "name": "结晶消除桩",
       "charges": 1
     }
   ],
   "summons": [
     {
-      "name": "雷鸣地雷",
-      "cost": 5
-    },
-    {
-      "name": "中继器",
-      "cost": 3
+      "name": "结晶消除桩",
+      "cost": 25,
+      "initial_charges": 0
     }
   ],
   "summon_bindings": [],
   "actions": [
     {
-      "time_ms": 13233,
+      "time_ms": 6608,
       "action": "deploy",
-      "operator_name": "谬因",
+      "operator_name": "锏",
       "grid": [
         4,
-        10
+        4
       ],
       "direction": "left",
       "is_object": false
     },
     {
-      "time_ms": 16631,
-      "action": "add_summon",
-      "operator_name": "中继器",
-      "grid": [
-        1,
-        0
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 16631,
+      "time_ms": 14548,
       "action": "deploy",
-      "operator_name": "中继器",
-      "grid": [
-        4,
-        7
-      ],
-      "direction": "down",
-      "is_object": false
-    },
-    {
-      "time_ms": 21975,
-      "action": "skill",
-      "operator_name": "谬因",
-      "grid": [
-        4,
-        10
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 23617,
-      "action": "add_summon",
-      "operator_name": "中继器",
+      "operator_name": "纯净结晶",
       "grid": [
         3,
-        0
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 23617,
-      "action": "deploy",
-      "operator_name": "中继器",
-      "grid": [
-        4,
-        7
-      ],
-      "direction": "down",
-      "is_object": false
-    },
-    {
-      "time_ms": 25804,
-      "action": "deploy",
-      "operator_name": "中继器",
-      "grid": [
-        5,
-        7
-      ],
-      "direction": "left",
-      "is_object": false
-    },
-    {
-      "time_ms": 27543,
-      "action": "deploy",
-      "operator_name": "中继器",
-      "grid": [
-        4,
-        9
-      ],
-      "direction": "left",
-      "is_object": false
-    },
-    {
-      "time_ms": 41362,
-      "action": "deploy",
-      "operator_name": "艾拉",
-      "grid": [
-        5,
-        10
-      ],
-      "direction": "left",
-      "is_object": false
-    },
-    {
-      "time_ms": 48517,
-      "action": "add_summon",
-      "operator_name": "雷鸣地雷",
-      "grid": [
-        3,
-        0
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 48517,
-      "action": "deploy",
-      "operator_name": "玛恩纳",
-      "grid": [
-        3,
-        9
-      ],
-      "direction": "down",
-      "is_object": false
-    },
-    {
-      "time_ms": 49774,
-      "action": "skill",
-      "operator_name": "谬因",
-      "grid": [
-        4,
-        10
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 54673,
-      "action": "add_summon",
-      "operator_name": "中继器",
-      "grid": [
-        1,
-        0
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 54673,
-      "action": "deploy",
-      "operator_name": "雷鸣地雷",
-      "grid": [
-        5,
-        7
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 65544,
-      "action": "deploy",
-      "operator_name": "枯朽祭坛",
-      "grid": [
-        4,
-        7
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 75618,
-      "action": "deploy",
-      "operator_name": "中继器",
-      "grid": [
-        4,
         8
       ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 33334,
+      "action": "skill",
+      "operator_name": "锏",
+      "grid": [
+        4,
+        4
+      ],
+      "direction": null,
+      "is_object": false
+    },
+    {
+      "time_ms": 36882,
+      "action": "deploy",
+      "operator_name": "结晶消除桩",
+      "grid": [
+        4,
+        11
+      ],
       "direction": "left",
       "is_object": false
     },
     {
-      "time_ms": 79386,
+      "time_ms": 46010,
       "action": "retreat",
-      "operator_name": "中继器",
+      "operator_name": "锏",
       "grid": [
         4,
-        8
+        4
       ],
       "direction": null,
       "is_object": false
     },
     {
-      "time_ms": 84418,
+      "time_ms": 49237,
       "action": "add_summon",
-      "operator_name": "中继器",
+      "operator_name": "结晶消除桩",
       "grid": [
         1,
         0
@@ -235,9 +96,9 @@
       "is_object": false
     },
     {
-      "time_ms": 84418,
+      "time_ms": 49237,
       "action": "deploy",
-      "operator_name": "隐德来希",
+      "operator_name": "菲亚梅塔",
       "grid": [
         5,
         9

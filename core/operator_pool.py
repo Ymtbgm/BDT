@@ -65,6 +65,17 @@ class OperatorPool:
         """重新计算部署栏坐标。"""
         self._bar_positions = self._calc_bar_positions()
 
+    def _rebuild_available_items(self):
+        """根据 self.items 的原始顺序和当前 _item_charges 重建 _available_items，
+
+        确保道具（含无限道具）返回部署栏时仍按初始道具排序排列。
+        """
+        self._available_items = [
+            it.name for it in reversed(self.items)
+            if self._item_charges.get(it.name, 0) > 0
+        ]
+        self._recalc()
+
     def _calc_bar_positions(self) -> Dict[int, Tuple[int, int]]:
         """根据当前部署区人数 + 道具数计算坐标：
         - 纵坐标固定比例 1480/1600
@@ -144,10 +155,11 @@ class OperatorPool:
         return [name for _, name in units] + support_names
 
     def get_deploy_pos(self, name: str) -> Optional[Tuple[int, int]]:
-        """获取干员、召唤物或道具在部署栏中的像素坐标，若不在部署区则返回 None。"""
-        if self._is_item(name):
-            if name not in self._available_items:
-                return None
+        """获取干员、召唤物或道具在部署栏中的像素坐标，若不在部署区则返回 None。
+
+        支持同名单位同时存在于 items 和 summons：道具耗尽后仍可作为召唤物查找。
+        """
+        if self._is_item(name) and name in self._available_items:
             pos_in_bar = self._available_items.index(name)
             return self._bar_positions.get(pos_in_bar)
 
@@ -175,10 +187,10 @@ class OperatorPool:
 
         - 道具：扣除 1 次使用次数；次数归零时从部署区移除。
         - 干员/召唤物：从部署区移除，记录实际部署位置。
+        - 同名单位同时存在于 items 和 summons 时，优先消耗道具；道具耗尽后
+          仍可作为召唤物部署。
         """
-        if self._is_item(name):
-            if name not in self._available_items:
-                return
+        if self._is_item(name) and name in self._available_items:
             self._item_charges[name] -= 1
             if self._item_charges[name] <= 0:
                 self._available_items.remove(name)
@@ -204,8 +216,9 @@ class OperatorPool:
     def retreat(self, name: str):
         """干员撤退：从已部署移除，按费用插入回部署区。
         召唤物撤退后不再回到部署栏（由用户通过 ADD_SUMMON 再次获得）。
-        道具不能撤退。"""
-        if self._is_item(name):
+        纯道具不能撤退；但同时是道具和召唤物的单位（如无限道具）允许撤退。
+        """
+        if self._is_item(name) and not self.is_summon(name):
             return
         if name in self._deployed:
             del self._deployed[name]
@@ -222,8 +235,8 @@ class OperatorPool:
             self._recalc()
 
     def is_available(self, name: str) -> bool:
-        if self._is_item(name):
-            return name in self._available_items
+        if self._is_item(name) and name in self._available_items:
+            return True
         if self.is_summon(name):
             return self._summon_available(name)
         idx = self._name_to_index(name)
@@ -262,16 +275,26 @@ class OperatorPool:
         return self._summon_charges.get(name, 0)
 
     def register_summons(self, summons: List[SummonInfo]):
-        """预注册脚本中定义的所有召唤物（此时还不在部署栏中）。"""
+        """预注册脚本中定义的所有召唤物，并按 initial_charges 初始化部署栏中的数量。"""
         self._summons = {s.name: s.cost for s in summons}
         self._summon_charges.clear()
+        for s in summons:
+            if s.initial_charges > 0:
+                self._summon_charges[s.name] = s.initial_charges
         self._recalc()
 
     def activate_summon(self, name: str, charges: int = 1):
-        """执行 ADD_SUMMON 后调用，让指定召唤物真正进入部署栏。"""
+        """执行 ADD_SUMMON 后调用，让指定召唤物真正进入部署栏。
+
+        若该名称同时是初始道具（无限道具），则归还到道具区并按道具原始顺序排列。
+        """
         if name not in self._summons:
             raise ValueError(f"未注册的召唤物: {name}")
         if charges <= 0:
+            return
+        if self._is_item(name):
+            self._item_charges[name] = self._item_charges.get(name, 0) + charges
+            self._rebuild_available_items()
             return
         self._summon_charges[name] = self._summon_charges.get(name, 0) + charges
         self._recalc()

@@ -45,8 +45,8 @@ class StageSelector:
         top = self.capture.monitor.get("top", 0)
         return left + int(w * rx), top + int(h * ry)
 
-    def find_stage(self, stage_name: str) -> Optional[Tuple[int, int]]:
-        """在当前截图中查找关卡名并返回屏幕坐标。
+    def find_stage(self, stage_code: str) -> Optional[Tuple[int, int]]:
+        """在当前截图中查找关卡代号并返回屏幕坐标。
 
         为加速 CPU 推理，整图按比例缩小到最长边 max_side，
         OCR 完成后将坐标放大回原始尺寸。
@@ -63,7 +63,7 @@ class StageSelector:
             )
 
         all_lines = self.ocr.recognize(frame)
-        result = self.ocr.find_text(frame, stage_name, lines=all_lines)
+        result = self.ocr.find_text(frame, stage_code, lines=all_lines)
         if result is None:
             return None
         cx, cy, matched_text, conf = result
@@ -74,8 +74,8 @@ class StageSelector:
         top = self.capture.monitor.get("top", 0)
         return cx + left, cy + top
 
-    async def click_stage(self, stage_name: str, timeout: float = 60.0, interval: float = 1.0, should_stop=None) -> bool:
-        """循环查找关卡名并点击，直到成功或超时。
+    async def click_stage(self, stage_code: str, timeout: float = 60.0, interval: float = 1.0, should_stop=None) -> bool:
+        """循环查找关卡代号并点击，直到成功或超时。
 
         注意：为避免 OCR 推理耗时过长导致"刚找到就超时"，
         只有在 loop 开头检查超时；一旦 find_stage 返回有效坐标，
@@ -90,7 +90,7 @@ class StageSelector:
             if time.time() >= end_time:
                 break
             attempt += 1
-            pos = self.find_stage(stage_name)
+            pos = self.find_stage(stage_code)
             if pos is not None:
                 x, y = pos
                 pydirectinput.moveTo(x, y)
@@ -101,12 +101,12 @@ class StageSelector:
                 break
             await asyncio.sleep(interval)
         if self.debug:
-            print(f"[DEBUG] 未找到关卡 '{stage_name}'，截图与 OCR 结果已保存到 debug/ 目录")
+            print(f"[DEBUG] 未找到关卡 '{stage_code}'，截图与 OCR 结果已保存到 debug/ 目录")
         return False
 
     async def enter_stage(
         self,
-        stage_name: str,
+        stage_code: str,
         borrow_support: bool = False,
         support_friend_index: Optional[int] = None,
         support_skill: int = 1,
@@ -138,12 +138,12 @@ class StageSelector:
             print("[关卡选择] 已点击确认开始")
             return True
 
-        # 1. 查找并点击关卡名
-        found = await self.click_stage(stage_name, should_stop=should_stop)
+        # 1. 查找并点击关卡代号
+        found = await self.click_stage(stage_code, should_stop=should_stop)
         if not found:
-            print(f"[关卡选择] 未找到关卡: {stage_name}")
+            print(f"[关卡选择] 未找到关卡: {stage_code}")
             return False
-        print(f"[关卡选择] 已点击关卡: {stage_name}")
+        print(f"[关卡选择] 已点击关卡: {stage_code}")
 
         # 1.5 突袭模式：点击切换按钮
         if challenge_mode:

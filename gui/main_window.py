@@ -67,8 +67,6 @@ class MainWindow(QMainWindow):
     combo_support_skill: QComboBox
     combo_support_module: QComboBox
     combo_pause_key: QComboBox
-    combo_ocr_engine: QComboBox
-    combo_avatar_model: QComboBox
     line_skill_key: QLineEdit
     line_retreat_key: QLineEdit
     line_speed_key: QLineEdit
@@ -79,10 +77,7 @@ class MainWindow(QMainWindow):
     process: QProcess | None
 
     # 脚本编辑 Tab
-    stage_name_edit: QLineEdit
     stage_code_edit: QLineEdit
-    rows_spin: QSpinBox
-    cols_spin: QSpinBox
     operators_list: QListWidget
     op_input: QLineEdit
     btn_add_op: QPushButton
@@ -147,10 +142,7 @@ class MainWindow(QMainWindow):
     timer_status: QLabel
 
     # 操作录制 Tab
-    rec_stage_name: QLineEdit
     rec_stage_code: QLineEdit
-    rec_grid_rows: QSpinBox
-    rec_grid_cols: QSpinBox
     rec_chk_support_op: QCheckBox
     combo_rec_debug: CheckedComboBox
     rec_initial_operator_count: QSpinBox
@@ -192,7 +184,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(_icon_path))
         self.resize(1600, 900)
         self.setMinimumWidth(1280)
-        self.script = ScriptModel(grid_rows=7, grid_cols=9)
+        self.script = ScriptModel(stage_code="1-7")
         self._applying_edit = False
         self._selecting = False
         self._has_minimized = False
@@ -288,14 +280,9 @@ class MainWindow(QMainWindow):
             "challenge_mode": self.chk_challenge_mode.isChecked(),
             "speed2x": self.chk_speed2x.isChecked(),
             "cost_tag": self.combo_cost_tag.currentData() or "",
-            "ocr_engine": self.combo_ocr_engine.currentData() or "auto",
-            "avatar_model": self.combo_avatar_model.currentData() or "resnet18",
             "rec_debug_keys": self.combo_rec_debug.checked_data(),
             "rec_support_op": self.rec_chk_support_op.isChecked(),
-            "rec_stage_name": self.rec_stage_name.text(),
             "rec_stage_code": self.rec_stage_code.text(),
-            "rec_grid_rows": self.rec_grid_rows.value(),
-            "rec_grid_cols": self.rec_grid_cols.value(),
             "rec_initial_operator_count": self.rec_initial_operator_count.value(),
             "rec_initial_item_count": self.rec_initial_item_count.value(),
             "rec_operators": [
@@ -357,14 +344,6 @@ class MainWindow(QMainWindow):
             idx = self.combo_cost_tag.findData(cost_tag)
             if idx >= 0:
                 self.combo_cost_tag.setCurrentIndex(idx)
-        ocr_engine = config.get("ocr_engine", "auto")
-        idx = self.combo_ocr_engine.findData(ocr_engine)
-        if idx >= 0:
-            self.combo_ocr_engine.setCurrentIndex(idx)
-        avatar_model = config.get("avatar_model", "resnet18")
-        idx = self.combo_avatar_model.findData(avatar_model)
-        if idx >= 0:
-            self.combo_avatar_model.setCurrentIndex(idx)
         self.combo_rec_debug.set_checked_data(config.get("rec_debug_keys", []))
         # 兼容旧配置：根据原来的布尔值构造勾选列表
         legacy_keys = []
@@ -379,10 +358,7 @@ class MainWindow(QMainWindow):
         if legacy_keys:
             self.combo_rec_debug.set_checked_data(legacy_keys)
         self.rec_chk_support_op.setChecked(config.get("rec_support_op", False))
-        self.rec_stage_name.setText(config.get("rec_stage_name", ""))
         self.rec_stage_code.setText(config.get("rec_stage_code", ""))
-        self.rec_grid_rows.setValue(config.get("rec_grid_rows", 7))
-        self.rec_grid_cols.setValue(config.get("rec_grid_cols", 9))
         self.rec_initial_operator_count.setValue(config.get("rec_initial_operator_count", 12))
         self.rec_initial_item_count.setValue(config.get("rec_initial_item_count", 0))
         self.rec_op_table.setRowCount(0)

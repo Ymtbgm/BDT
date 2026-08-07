@@ -48,6 +48,15 @@ class TimerTab(QWidget):
         self.main_window.chk_timer_debug = QCheckBox("Debug 输出")
         layout.addWidget(self.main_window.chk_timer_debug)
 
+        self.main_window.chk_timer_high_perf = QCheckBox("高精度模式")
+        self.main_window.chk_timer_high_perf.setToolTip(
+            "启用独立 TimeKeeper 线程和 1ms 系统定时器分辨率，"
+            "降低 MAX 费用条后的计时漂移（CPU 占用略高）。\n"
+            "高精度模式下若需部署干员，建议先暂停游戏再部署，"
+            "避免拖拽操作引入计时偏差。"
+        )
+        layout.addWidget(self.main_window.chk_timer_high_perf)
+
         self.main_window.combo_timer_cost_tag = QComboBox()
         self.main_window.combo_timer_cost_tag.addItem("无", "")
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低25%", "cc_25")
@@ -73,7 +82,8 @@ class TimerTab(QWidget):
                 <li>计时器窗口默认置顶，可拖动到任意位置，不会被游戏遮挡。</li>
                 <li>检测到正式开始游戏(费用条开始动)后自动开始计时。</li>
                 <li>对三个区域持续模板监控，<span style="color: red;">因此请使用快捷键控制倍速和暂停，不要鼠标操作暂停键和倍率区，不要鼠标触碰到费用条。</span></li>
-                <li>在费用条满之前会持续对费用条监控，通常不会存在误差；费用条满后不再监控费用条，通常情况下误差会在1帧内，刻意反复频繁操作会增大误差。<li>
+                <li>高精度模式下若需部署干员，<span style="color: red;">请先暂停游戏再部署</span>，避免拖拽导致的计时偏差。</li>
+                <li>在费用条满之前会持续对费用条监控，通常不会存在误差；费用条满后不再监控费用条，通常情况下误差会在1帧内，刻意反复频繁操作会增大误差。</li>
             </ul>
             """
         )
@@ -114,6 +124,7 @@ class TimerTab(QWidget):
                 debug=self.main_window.chk_timer_debug.isChecked(),
                 matchstick_hotkeys=matchstick_hotkeys if matchstick_hotkeys else None,
                 cost_bar_calibration_name=cost_tag,
+                high_precision=self.main_window.chk_timer_high_perf.isChecked(),
             )
             self.main_window._region_timer.start(use_cost_detection=True)
         except Exception as e:
@@ -191,6 +202,8 @@ class TimerTab(QWidget):
             return
         if self.main_window._timer_qtimer is not None:
             self.main_window._timer_qtimer.stop()
+        # 先彻底停止再重新启动，避免旧 TimeKeeper/采样线程残留导致状态混乱
+        self.main_window._region_timer.stop()
         self.main_window._region_timer.start(use_cost_detection=True)
         self.main_window._region_timer.manual_pause()
         if self.main_window._timer_overlay is not None:

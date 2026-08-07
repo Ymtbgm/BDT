@@ -31,27 +31,10 @@ class EditorTab(QWidget):
 
         # 顶部横条：关卡信息 + 脚本管理
         top_bar = QHBoxLayout()
-        top_bar.addWidget(QLabel("关卡名"))
-        self.main_window.stage_name_edit = QLineEdit()
-        self.main_window.stage_name_edit.setMaximumWidth(120)
-        top_bar.addWidget(self.main_window.stage_name_edit)
-
         top_bar.addWidget(QLabel("关卡代号"))
         self.main_window.stage_code_edit = QLineEdit()
-        self.main_window.stage_code_edit.setMaximumWidth(80)
+        self.main_window.stage_code_edit.setMaximumWidth(120)
         top_bar.addWidget(self.main_window.stage_code_edit)
-
-        top_bar.addWidget(QLabel("地图行数"))
-        self.main_window.rows_spin = QSpinBox()
-        self.main_window.rows_spin.setRange(1, 20)
-        self.main_window.rows_spin.setValue(7)
-        top_bar.addWidget(self.main_window.rows_spin)
-
-        top_bar.addWidget(QLabel("地图列数"))
-        self.main_window.cols_spin = QSpinBox()
-        self.main_window.cols_spin.setRange(1, 20)
-        self.main_window.cols_spin.setValue(9)
-        top_bar.addWidget(self.main_window.cols_spin)
 
         top_bar.addStretch()
 
@@ -349,9 +332,6 @@ class EditorTab(QWidget):
         self.main_window.action_table.itemSelectionChanged.connect(self._on_select)
         self.main_window.action_table.cellChanged.connect(self._on_cell_changed)
         self.main_window.combo_action.currentTextChanged.connect(self._on_action_type_changed)
-        self.main_window.rows_spin.valueChanged.connect(self._update_script_meta)
-        self.main_window.cols_spin.valueChanged.connect(self._update_script_meta)
-        self.main_window.stage_name_edit.textChanged.connect(self._update_script_meta)
         self.main_window.stage_code_edit.textChanged.connect(self._update_script_meta)
         self.main_window.btn_add_op.clicked.connect(self._add_operator)
         self.main_window.btn_remove_op.clicked.connect(self._remove_operator)
@@ -383,10 +363,14 @@ class EditorTab(QWidget):
         self._refresh_table()
 
     def _update_script_meta(self):
-        self.main_window.script.stage_name = self.main_window.stage_name_edit.text() or None
-        self.main_window.script.stage_code = self.main_window.stage_code_edit.text() or None
-        self.main_window.script.grid_rows = self.main_window.rows_spin.value()
-        self.main_window.script.grid_cols = self.main_window.cols_spin.value()
+        code = self.main_window.stage_code_edit.text().strip()
+        self.main_window.script.stage_code = code or None
+        # grid_rows/grid_cols 由 levels.json 根据 stage_code 自动推导
+        if code:
+            from core.tile_pos import load_stage_dimensions
+            dims = load_stage_dimensions(code)
+            if dims:
+                self.main_window.script.grid_cols, self.main_window.script.grid_rows = dims
         self._mark_dirty()
 
     def _sync_operators_to_script(self):
@@ -888,15 +872,10 @@ class EditorTab(QWidget):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-        self.main_window.script = ScriptModel(grid_rows=7, grid_cols=9)
-        for w in (self.main_window.stage_name_edit, self.main_window.stage_code_edit, self.main_window.rows_spin, self.main_window.cols_spin):
-            w.blockSignals(True)
-        self.main_window.stage_name_edit.clear()
+        self.main_window.script = ScriptModel(stage_code="1-7")
+        self.main_window.stage_code_edit.blockSignals(True)
         self.main_window.stage_code_edit.clear()
-        self.main_window.rows_spin.setValue(7)
-        self.main_window.cols_spin.setValue(9)
-        for w in (self.main_window.stage_name_edit, self.main_window.stage_code_edit, self.main_window.rows_spin, self.main_window.cols_spin):
-            w.blockSignals(False)
+        self.main_window.stage_code_edit.blockSignals(False)
         self.main_window.operators_list.clear()
         self.main_window.items_table.setRowCount(0)
         self.main_window.summons_table.setRowCount(0)
@@ -926,14 +905,9 @@ class EditorTab(QWidget):
             QMessageBox.critical(self.main_window, "打开失败", f"脚本格式错误或解析失败:\n{e}")
             return
 
-        for w in (self.main_window.stage_name_edit, self.main_window.stage_code_edit, self.main_window.rows_spin, self.main_window.cols_spin):
-            w.blockSignals(True)
-        self.main_window.stage_name_edit.setText(self.main_window.script.stage_name or "")
+        self.main_window.stage_code_edit.blockSignals(True)
         self.main_window.stage_code_edit.setText(self.main_window.script.stage_code or "")
-        self.main_window.rows_spin.setValue(self.main_window.script.grid_rows)
-        self.main_window.cols_spin.setValue(self.main_window.script.grid_cols)
-        for w in (self.main_window.stage_name_edit, self.main_window.stage_code_edit, self.main_window.rows_spin, self.main_window.cols_spin):
-            w.blockSignals(False)
+        self.main_window.stage_code_edit.blockSignals(False)
 
         self.main_window.operators_list.clear()
         for op in self.main_window.script.operators:

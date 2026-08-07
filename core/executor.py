@@ -25,7 +25,7 @@ class ExecutorState(BaseModel):
     is_running: bool = False
     is_paused: bool = False
     current_time_ms: int = 0
-    stage_name: Optional[str] = None
+    stage_code: Optional[str] = None
 
 
 class ScriptExecutor:
@@ -168,7 +168,7 @@ class ScriptExecutor:
         w, h = self.capture.get_window_size()
         self.grid = GridMapper(
             w, h, script.grid_rows, script.grid_cols,
-            stage_code=script.stage_code, stage_name=script.stage_name,
+            stage_code=script.stage_code,
         )
         support_count = 1 if borrow_support else 0
         self.pool = OperatorPool(
@@ -185,11 +185,11 @@ class ScriptExecutor:
             for b in (script.summon_bindings or [])
         }
 
-    def verify_stage_name(self) -> bool:
-        if not self.script or not self.script.stage_name:
+    def verify_stage_code(self) -> bool:
+        if not self.script or not self.script.stage_code:
             return True
         frame = self.capture.capture()
-        found = self.ocr.find_text(frame, self.script.stage_name)
+        found = self.ocr.find_text(frame, self.script.stage_code)
         if found is None:
             return False
         return True
@@ -780,5 +780,5 @@ class ScriptExecutor:
             is_running=self.timer._running and not self.timer._paused,
             is_paused=self.timer._paused,
             current_time_ms=self.timer.get_elapsed_ms(),
-            stage_name=self.script.stage_name if self.script else None,
+            stage_code=self.script.stage_code if self.script else None,
         )

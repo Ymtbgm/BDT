@@ -73,3 +73,29 @@ ResNet_test/
 
 # Arknights-Tile-Pos-main is kept outside the main project, ignore if copied in
 Arknights-Tile-Pos-main/
+
+# 大模型权重 / 训练产物
+*.onnx
+num_CNN/
+core/resource/models/
+
+# 第三方源码（clone 的依赖库）
+windows-capture-main/
+
+# 二进制依赖 / DLL
+tools/dxgi_capture_dll/
+*.dll
+
+# 临时 / 本地测试文件
+*.log
+benchmark_log.txt
+dxcam_test.py
+level_*.json
+
+# 本地数据 / 数据集
+data/
+YOLO/
+
+# 个人笔记 / 中间文档
+time_state.md
+deploy_guide_thick7.md

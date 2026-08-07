@@ -127,7 +127,7 @@ class StageRetryHandler:
 
     async def run_retry_loop(
         self,
-        stage_name: str,
+        stage_code: str,
         max_retries: int = 3,
         check_interval: float = 1.0,
     ) -> bool:
@@ -140,7 +140,7 @@ class StageRetryHandler:
             print(f"[重试] 第 {attempt}/{max_retries} 次尝试...")
 
             # 先进入关卡
-            ok = await self.selector.enter_stage(stage_name)
+            ok = await self.selector.enter_stage(stage_code)
             if not ok:
                 print("[重试] 进入关卡失败，跳过本次尝试")
                 continue
@@ -175,7 +175,7 @@ class StageRetryHandler:
             await asyncio.sleep(check_interval)
         return False
 
-    async def handle_leak_once(self, stage_name: str, should_stop=None) -> bool:
+    async def handle_leak_once(self, stage_code: str, should_stop=None) -> bool:
         """单次漏怪处理：执行重试点击并重新进入关卡。"""
         if should_stop is not None and should_stop():
             return False
@@ -183,4 +183,4 @@ class StageRetryHandler:
         await self._perform_retry_clicks()
         if should_stop is not None and should_stop():
             return False
-        return await self.selector.enter_stage(stage_name, should_stop=should_stop)
+        return await self.selector.enter_stage(stage_code, should_stop=should_stop)

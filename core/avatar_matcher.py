@@ -5,6 +5,9 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from core.logging_utils import log_error, log_info
+from core.onnx_utils import create_session_options, get_onnx_providers
+
 
 class AvatarMatcherBase(ABC):
     """头像匹配器基类，统一提供分数矩阵与贪心分配接口。"""
@@ -381,7 +384,7 @@ def ensure_resnet18_onnx(input_size: int = 224, output_path: Optional[Path] = No
         return output_path
     matcher = ResNetAvatarMatcher(input_size=input_size)
     matcher.export_onnx(output_path)
-    print(f"[头像匹配] ONNX 模型已导出: {output_path}")
+    log_info(f"[头像匹配] ONNX 模型已导出: {output_path}")
     return output_path
 
 
@@ -422,24 +425,8 @@ def ensure_mobilenetv4_onnx(
         opset_version=11,
         dynamo=False,
     )
-    print(f"[头像匹配] MobileNetV4 ONNX 模型已导出: {output_path}")
+    log_info(f"[头像匹配] MobileNetV4 ONNX 模型已导出: {output_path}")
     return output_path
-
-
-def _get_onnx_providers(prefer: Optional[str] = None) -> List[str]:
-    """返回可用的 ONNX Runtime execution provider 列表，优先 DirectML，否则 CPU。"""
-    import onnxruntime as ort
-
-    available = set(ort.get_available_providers())
-    providers: List[str] = []
-    if prefer == "directml" or prefer is None:
-        if "DmlExecutionProvider" in available:
-            providers.append("DmlExecutionProvider")
-    if "CPUExecutionProvider" in available:
-        providers.append("CPUExecutionProvider")
-    if not providers and available:
-        providers.extend(available)
-    return providers
 
 
 class ONNXFeatureAvatarMatcher(AvatarMatcherBase):
@@ -461,17 +448,13 @@ class ONNXFeatureAvatarMatcher(AvatarMatcherBase):
         self.input_size = input_size
         self.min_score = min_score
 
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.enable_mem_pattern = True
-
-        providers = _get_onnx_providers()
+        sess_options = create_session_options()
         self.session = ort.InferenceSession(
-            str(model_path), sess_options=sess_options, providers=providers
+            str(model_path), sess_options=sess_options, providers=get_onnx_providers()
         )
         self.input_name = self.session.get_inputs()[0].name
         self.providers = self.session.get_providers()
-        print(f"[头像匹配] ONNX 后端: {self.providers}")
+        log_info(f"[头像匹配] ONNX 后端: {self.providers}")
 
         self._mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 3, 1, 1)
         self._std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 3, 1, 1)
@@ -609,10 +592,9 @@ class LogoMiniCNNMatcher:
         self._mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 3, 1, 1)
         self._std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 3, 1, 1)
 
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options = create_session_options()
         self.session = ort.InferenceSession(
-            str(model_path), sess_options=sess_options, providers=_get_onnx_providers()
+            str(model_path), sess_options=sess_options, providers=get_onnx_providers()
         )
         self.input_name = self.session.get_inputs()[0].name
 
@@ -667,10 +649,9 @@ class LogoMiniCNNEmbedder:
         self._mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 3, 1, 1)
         self._std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 3, 1, 1)
 
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options = create_session_options()
         self.session = ort.InferenceSession(
-            str(model_path), sess_options=sess_options, providers=_get_onnx_providers()
+            str(model_path), sess_options=sess_options, providers=get_onnx_providers()
         )
         self.input_name = self.session.get_inputs()[0].name
 
@@ -717,10 +698,10 @@ def preload_resnet(device: Optional[str] = None) -> Optional[ResNetAvatarMatcher
         return _resnet_matcher_cache
     try:
         _resnet_matcher_cache = ResNetAvatarMatcher(device=device)
-        print("[头像匹配] ResNet18 预加载完成")
+        log_info("[头像匹配] ResNet18 预加载完成")
         return _resnet_matcher_cache
     except Exception as e:
-        print(f"[头像匹配] ResNet18 预加载失败: {e}")
+        log_info(f"[头像匹配] ResNet18 预加载失败: {e}")
         return None
 
 
@@ -749,16 +730,16 @@ def create_avatar_matcher(
                     onnx_path = ensure_mobilenetv4_onnx(model_name=model_name, input_size=input_size)
                     return ONNXFeatureAvatarMatcher(onnx_path, input_size=input_size)
                 except Exception as e:
-                    print(f"[头像匹配] ONNX {model_name} 初始化失败，尝试 ResNet18: {e}")
+                    log_info(f"[头像匹配] ONNX {model_name} 初始化失败，尝试 ResNet18: {e}")
             try:
                 onnx_path = ensure_resnet18_onnx(input_size)
                 return ONNXFeatureAvatarMatcher(onnx_path, input_size=input_size)
             except Exception as e:
-                print(f"[头像匹配] ONNX ResNet18 初始化失败，尝试 PyTorch: {e}")
+                log_info(f"[头像匹配] ONNX ResNet18 初始化失败，尝试 PyTorch: {e}")
         if _resnet_matcher_cache is not None:
             return _resnet_matcher_cache
         try:
             return ResNetAvatarMatcher(input_size=input_size)
         except Exception as e:
-            print(f"[头像匹配] ResNet 初始化失败，回退到模板匹配: {e}")
+            log_info(f"[头像匹配] ResNet 初始化失败，回退到模板匹配: {e}")
     return AvatarMatcher()

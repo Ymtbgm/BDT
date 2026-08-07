@@ -13,7 +13,7 @@ from core.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
 from core.capture import WindowCapture
 from core.ocr_engine import OCREngine
 from core.region_state_timer import RegionStateTimer
-from core.tile_pos import TilePosCalculator
+from core.tile_pos import TilePosCalculator, load_stage_dimensions
 from models.raw_recording import RawRecording, RawAction, Keyframe, KeyframeType
 from models.script_schema import ScriptModel, ActionType
 
@@ -46,14 +46,14 @@ class ActionRecorder:
     # 部署时名称卡 ROI（基于 2560x1600 的绝对像素 x,y,w,h），显示在画面左上角
     _NAME_CARD_X = 0
     _NAME_CARD_Y = 480
-    _NAME_CARD_W = 210
+    _NAME_CARD_W = 240
     _NAME_CARD_H = 50
 
     # 整栏截图 ROI 比例：覆盖费用数字到屏幕底部，确保数量区域（1560~1600）被包含
-    # 实际截图时会上移 20px，因此保存到关键帧的 effective top = 1390 - 20 = 1370
-    _BAR_CAPTURE_TOP_RATIO = 1390 / 1600
-    _BAR_CAPTURE_EFFECTIVE_TOP_RATIO = 1370 / 1600
-    _BAR_CAPTURE_HEIGHT_RATIO = 230 / 1600
+    # 实际截图时会上移 20px，因此保存到关键帧的 effective top = 1380 - 20 = 1360
+    _BAR_CAPTURE_TOP_RATIO = 1380 / 1600
+    _BAR_CAPTURE_EFFECTIVE_TOP_RATIO = 1360 / 1600
+    _BAR_CAPTURE_HEIGHT_RATIO = 240 / 1600
 
     # 拖拽判定：mouseUp 与 mouseDown 距离超过此阈值视为拖拽（而非点击）
     # 同时影响 pre-deploy 截图触发时机，避免光标/手指刚离开部署栏就截图
@@ -74,10 +74,7 @@ class ActionRecorder:
         self,
         capture: WindowCapture,
         timer: Optional[RegionStateTimer] = None,
-        grid_rows: int = 7,
-        grid_cols: int = 9,
-        stage_code: Optional[str] = None,
-        stage_name: Optional[str] = None,
+        stage_code: str = "",
         debug: bool = False,
         debug_cost_bar: bool = False,
         debug_resolver: bool = False,
@@ -111,19 +108,26 @@ class ActionRecorder:
         self.initial_operator_count = max(0, initial_operator_count)
         self.initial_item_count = max(0, initial_item_count)
         self.support_count = max(0, support_count)
-        self.grid_rows = grid_rows
-        self.grid_cols = grid_cols
         self.stage_code = stage_code
-        self.stage_name = stage_name
         self.ocr = ocr
+
+        if not stage_code:
+            raise ValueError("必须提供关卡代号 stage_code")
+        dims = load_stage_dimensions(stage_code)
+        if dims is None:
+            raise ValueError(
+                f"无法在 levels.json 中找到关卡代号 '{stage_code}' 的尺寸信息，"
+                f"请确认代号正确或补充 levels.json"
+            )
+        self.grid_cols, self.grid_rows = dims
 
         w, h = capture.get_window_size()
         left = capture.monitor.get("left", 0)
         top = capture.monitor.get("top", 0)
 
         self.tile_calc = TilePosCalculator(
-            w, h, grid_rows, grid_cols,
-            stage_code=stage_code, stage_name=stage_name,
+            w, h, self.grid_rows, self.grid_cols,
+            stage_code=stage_code,
         )
 
         self._scale_x = w / self._BASE_W
@@ -336,8 +340,8 @@ class ActionRecorder:
 
         captured = 0
         for roi_index in range(len(name_ratios)):
-            if not has_support and roi_index == 6:
-                # 不携带助战时，第 7 个槽位（右上角助战位）为空，跳过
+            if not has_support and roi_index == 12:
+                # 不携带助战时，跳过第 13 个槽位（右上角助战位）
                 continue
             if captured >= self.initial_operator_count:
                 break
@@ -476,7 +480,6 @@ class ActionRecorder:
         }
         raw = RawRecording(
             stage_code=self.stage_code,
-            stage_name=self.stage_name,
             grid_rows=self.grid_rows,
             grid_cols=self.grid_cols,
             session_id=self._session_id,
@@ -498,6 +501,11 @@ class ActionRecorder:
         return abs_x - left, abs_y - top
 
     def _nearest_grid(self, win_x: int, win_y: int, side: bool = False) -> Optional[Tuple[int, int]]:
+        # side 视角下使用投影四边形命中测试，避免“落在 A 格内但离 B 格中心更近”的误判
+        if side:
+            hit = self.tile_calc.hit_test(win_x, win_y, side=True)
+            if hit is not None:
+                return hit
         best = None
         best_dist = float("inf")
         for r in range(self.grid_rows):
@@ -933,6 +941,19 @@ class ActionRecorder:
                 # 截图仅由 _on_move 在鼠标移出部署区后触发。
                 bar_idx = self._bar_index_at(win_x, win_y)
                 if bar_idx is not None:
+                    self._start_deploy_drag(win_x, win_y, bar_idx)
+
+            elif state == "UNIT_SELECTED":
+                # 选中干员后，如果用户又回到部署栏点干员，说明要取消当前选中并部署新干员。
+                # 这里在 mouseDown 就切换，避免 mouseUp 时被当作“点击空地”丢弃。
+                bar_idx = self._bar_index_at(win_x, win_y)
+                if bar_idx is not None:
+                    self._log(
+                        f"UNIT_SELECTED 时在部署区 mouseDown (slot[{bar_idx}])，"
+                        f"取消当前选中并开始新部署"
+                    )
+                    self._cancel_timeout()
+                    self._reset_state()
                     self._start_deploy_drag(win_x, win_y, bar_idx)
 
             elif state == "AWAITING_DIRECTION":

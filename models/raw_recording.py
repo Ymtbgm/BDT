@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.script_schema import ActionType
 
@@ -44,17 +44,43 @@ class RawAction(BaseModel):
 class RawRecording(BaseModel):
     """关键帧录制器的输出，离线解析后生成 ScriptModel。"""
 
+    model_config = ConfigDict(extra="ignore")
+
     version: str = "1.0"
-    stage_code: Optional[str] = Field(None, description="关卡代号")
-    stage_name: Optional[str] = Field(None, description="关卡名")
-    grid_rows: int = Field(..., description="地图总行数")
-    grid_cols: int = Field(..., description="地图总列数")
+    stage_code: str = Field(..., description="关卡代号，用于查询相机位置和地图尺寸")
+    grid_rows: int = Field(..., description="地图总行数，由 stage_code 从 levels.json 自动解析")
+    grid_cols: int = Field(..., description="地图总列数，由 stage_code 从 levels.json 自动解析")
     session_id: str = Field(..., description="录制会话 ID，用于关键帧目录命名")
     initial_operator_count: int = Field(0, description="用户输入的初始干员数量")
     initial_item_count: int = Field(0, description="用户输入的初始道具数量")
     keyframes: Dict[str, Keyframe] = Field(default_factory=dict, description="关键帧 ID -> 元数据")
     actions: List[RawAction] = Field(default_factory=list, description="原始操作序列")
     hints: Dict[str, Any] = Field(default_factory=dict, description="可选提示：用户填的 aliases、bindings 等")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_and_populate(cls, data: Any) -> Any:
+        """旧录制兼容：stage_name 自动迁移为 stage_code；行列从 levels.json 自动补全。"""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+
+        if not data.get("stage_code") and data.get("stage_name"):
+            data["stage_code"] = data["stage_name"]
+
+        code = data.get("stage_code")
+        if code:
+            from core.tile_pos import load_stage_dimensions
+            dims = load_stage_dimensions(code)
+            if dims:
+                width, height = dims
+                data["grid_cols"] = width
+                data["grid_rows"] = height
+            else:
+                data.setdefault("grid_cols", 9)
+                data.setdefault("grid_rows", 7)
+
+        return data
 
     def sort_actions(self):
         self.actions.sort(key=lambda a: a.time_ms)

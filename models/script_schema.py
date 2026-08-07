@@ -1,6 +1,6 @@
 from enum import Enum
-from typing import List, Optional, Tuple
-from pydantic import BaseModel, Field
+from typing import Any, List, Optional, Tuple
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ActionType(str, Enum):
@@ -28,6 +28,10 @@ class OperatorAction(BaseModel):
 class SummonInfo(BaseModel):
     name: str = Field(..., description="召唤物名称")
     cost: int = Field(..., description="部署费用，用于在部署栏中按费用排序定位")
+    initial_charges: int = Field(
+        default=0,
+        description="初始进入部署栏的可用次数；0 表示不在初始栏位，>0 表示初始即存在（无限道具用 1）",
+    )
 
 
 class SummonBinding(BaseModel):
@@ -42,11 +46,12 @@ class ItemInfo(BaseModel):
 
 
 class ScriptModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     version: str = "1.0"
-    stage_code: Optional[str] = Field(None, description="关卡代号，如 1-7，用于精确查询相机位置")
-    stage_name: Optional[str] = Field(None, description="关卡名，OCR校验用")
-    grid_rows: int = Field(..., description="地图总行数")
-    grid_cols: int = Field(..., description="地图总列数")
+    stage_code: str = Field(..., description="关卡代号，如 1-7，用于精确查询相机位置和地图尺寸")
+    grid_rows: int = Field(..., description="地图总行数，由 stage_code 从 levels.json 自动解析")
+    grid_cols: int = Field(..., description="地图总列数，由 stage_code 从 levels.json 自动解析")
     operators: List[str] = Field(default_factory=list, description="初始携带干员列表，按位置顺序")
     items: List[ItemInfo] = Field(default_factory=list, description="关卡特殊部署物（道具），优先排列在部署栏最右侧")
     summons: List[SummonInfo] = Field(default_factory=list, description="特殊召唤物（如无人机、召唤物等），按费用插入干员区域")
@@ -55,6 +60,32 @@ class ScriptModel(BaseModel):
         description="干员与召唤物的绑定关系，执行器在干员撤退时据此清理对应召唤物",
     )
     actions: List[OperatorAction] = Field(default_factory=list, description="时间轴操作序列")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_and_populate(cls, data: Any) -> Any:
+        """旧脚本兼容：stage_name 自动迁移为 stage_code；行列从 levels.json 自动补全。"""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+
+        # 旧字段兼容：没有 stage_code 时拿 stage_name 顶上
+        if not data.get("stage_code") and data.get("stage_name"):
+            data["stage_code"] = data["stage_name"]
+
+        code = data.get("stage_code")
+        if code:
+            from core.tile_pos import load_stage_dimensions
+            dims = load_stage_dimensions(code)
+            if dims:
+                width, height = dims
+                data["grid_cols"] = width
+                data["grid_rows"] = height
+            else:
+                data.setdefault("grid_cols", 9)
+                data.setdefault("grid_rows", 7)
+
+        return data
 
     def sort_actions(self):
         self.actions.sort(key=lambda a: a.time_ms)

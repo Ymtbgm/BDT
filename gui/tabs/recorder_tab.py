@@ -29,66 +29,50 @@ class RecorderTab(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # 参数区域
+        # 参数区域：每行一个 QHBoxLayout，输入框紧跟标签，不居中展开
         param_group = QGroupBox("录制参数")
-        param_layout = QGridLayout()
+        param_layout = QVBoxLayout()
 
-        param_layout.addWidget(QLabel("关卡名称:"), 0, 0)
-        self.main_window.rec_stage_name = QLineEdit()
-        self.main_window.rec_stage_name.setPlaceholderText("如 1-7")
-        param_layout.addWidget(self.main_window.rec_stage_name, 0, 1)
-
-        param_layout.addWidget(QLabel("关卡代号:"), 0, 2)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("关卡代号:"))
         self.main_window.rec_stage_code = QLineEdit()
-        param_layout.addWidget(self.main_window.rec_stage_code, 0, 3)
+        self.main_window.rec_stage_code.setPlaceholderText("如 1-7")
+        self.main_window.rec_stage_code.setMaximumWidth(80)
+        row.addWidget(self.main_window.rec_stage_code)
+        row.addStretch()
+        param_layout.addLayout(row)
 
-        param_layout.addWidget(QLabel("地图行数:"), 1, 0)
-        self.main_window.rec_grid_rows = QSpinBox()
-        self.main_window.rec_grid_rows.setRange(1, 50)
-        self.main_window.rec_grid_rows.setValue(7)
-        param_layout.addWidget(self.main_window.rec_grid_rows, 1, 1)
-
-        param_layout.addWidget(QLabel("地图列数:"), 1, 2)
-        self.main_window.rec_grid_cols = QSpinBox()
-        self.main_window.rec_grid_cols.setRange(1, 50)
-        self.main_window.rec_grid_cols.setValue(9)
-        param_layout.addWidget(self.main_window.rec_grid_cols, 1, 3)
-
-        param_layout.addWidget(QLabel("初始干员数量:"), 2, 0)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("初始干员数量:"))
         self.main_window.rec_initial_operator_count = QSpinBox()
         self.main_window.rec_initial_operator_count.setRange(0, 13)
         self.main_window.rec_initial_operator_count.setValue(12)
         self.main_window.rec_initial_operator_count.setToolTip(
             "编队界面实际携带的干员总数（含助战）。不勾选助战时，右上角助战位会被跳过。"
         )
-        param_layout.addWidget(self.main_window.rec_initial_operator_count, 2, 1)
+        row.addWidget(self.main_window.rec_initial_operator_count)
+        self.main_window.rec_chk_support_op = QCheckBox("借用助战干员")
+        self.main_window.rec_chk_support_op.setToolTip(
+            "编队界面第 13 个槽位（右上角）为助战干员；不勾选时该位置会被跳过。"
+        )
+        row.addWidget(self.main_window.rec_chk_support_op)
+        row.addStretch()
+        param_layout.addLayout(row)
 
-        param_layout.addWidget(QLabel("初始道具数量:"), 3, 0)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("初始道具数量:"))
         self.main_window.rec_initial_item_count = QSpinBox()
         self.main_window.rec_initial_item_count.setRange(0, 12)
         self.main_window.rec_initial_item_count.setValue(0)
         self.main_window.rec_initial_item_count.setToolTip(
             "部署区初始道具种类数。道具将排列在部署栏最右侧。"
         )
-        param_layout.addWidget(self.main_window.rec_initial_item_count, 3, 1)
+        row.addWidget(self.main_window.rec_initial_item_count)
+        row.addStretch()
+        param_layout.addLayout(row)
 
-        param_layout.addWidget(QLabel("头像匹配模型:"), 3, 2)
-        self.main_window.combo_avatar_model = QComboBox()
-        self.main_window.combo_avatar_model.addItem("ResNet18", "resnet18")
-        self.main_window.combo_avatar_model.addItem("MobileNetV4 Small", "mobilenetv4_conv_small")
-        self.main_window.combo_avatar_model.setToolTip(
-            "离线解析时使用的头像匹配模型。MobileNetV4 Small 更快，ResNet18 更稳定。"
-        )
-        param_layout.addWidget(self.main_window.combo_avatar_model, 3, 3)
-
-        self.main_window.rec_chk_support_op = QCheckBox("借用助战干员")
-        self.main_window.rec_chk_support_op.setToolTip(
-            "编队界面右上角第 7 个槽位为助战干员；不勾选时该位置会被跳过，"
-            "干员数量≥7 时自动从下一行继续截取。"
-        )
-        param_layout.addWidget(self.main_window.rec_chk_support_op, 2, 2, 1, 2)
-
-        param_layout.addWidget(QLabel("调试选项:"), 4, 0)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("debug选项:"))
         self.main_window.combo_rec_debug = CheckedComboBox("未选择")
         self.main_window.combo_rec_debug.add_item("录制器状态机", "recorder")
         self.main_window.combo_rec_debug.add_item("费用条检测", "cost_bar")
@@ -97,7 +81,10 @@ class RecorderTab(QWidget):
         self.main_window.combo_rec_debug.setToolTip(
             "勾选需要打印日志或保存截图的调试项，可多选。"
         )
-        param_layout.addWidget(self.main_window.combo_rec_debug, 4, 1, 1, 3)
+        self.main_window.combo_rec_debug.setMaximumWidth(200)
+        row.addWidget(self.main_window.combo_rec_debug)
+        row.addStretch()
+        param_layout.addLayout(row)
 
         # 干员列表 + 道具列表并排
         op_group = QGroupBox("干员列表")
@@ -165,7 +152,7 @@ class RecorderTab(QWidget):
         list_layout = QHBoxLayout()
         list_layout.addWidget(op_group, 1)
         list_layout.addWidget(item_group, 1)
-        param_layout.addLayout(list_layout, 5, 0, 1, 4)
+        param_layout.addLayout(list_layout)
 
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
@@ -184,13 +171,9 @@ class RecorderTab(QWidget):
         self.main_window.rec_op_table.cellChanged.connect(self.main_window._save_config)
 
         # 录制参数变更自动保存配置
-        self.main_window.rec_stage_name.textChanged.connect(self.main_window._save_config)
         self.main_window.rec_stage_code.textChanged.connect(self.main_window._save_config)
-        self.main_window.rec_grid_rows.valueChanged.connect(self.main_window._save_config)
-        self.main_window.rec_grid_cols.valueChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_operator_count.valueChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_item_count.valueChanged.connect(self.main_window._save_config)
-        self.main_window.combo_avatar_model.currentIndexChanged.connect(self.main_window._save_config)
         self.main_window.combo_rec_debug.item_changed.connect(self.main_window._save_config)
         self.main_window.rec_chk_support_op.stateChanged.connect(self.main_window._save_config)
 
@@ -203,6 +186,7 @@ class RecorderTab(QWidget):
             "<ul>"
             "<li>在编队界面点击开始录制，引导显示 加载完毕，请进入作战... 即可进入作战。</li>"
             "<li>进入作战后检测到费用条启动即开始记录。</li>"
+            "<li>干员被击退前请主动撤退，否则也会错位。</li>"
             "<li>F10停止录制。</li>"
             "<li>录制结束后会自动离线识别并生成脚本，若出现 __unknown__ / __item__ 可以手动修正，这是因为该单位未被部署，不修正不会影响脚本正常执行。</li>"
             "</ul>"
@@ -286,16 +270,17 @@ class RecorderTab(QWidget):
             QMessageBox.warning(self.main_window, "参数错误", "请在“初始干员数量”中填写编队携带的干员数量（至少 1）。")
             return
 
+        stage_code = self.main_window.rec_stage_code.text().strip()
+        if not stage_code:
+            QMessageBox.warning(self.main_window, "参数错误", "请填写关卡代号（如 1-7）。")
+            return
+
         try:
             self.main_window._recorder_capture = WindowCapture(backend="mss")
         except Exception as e:
             QMessageBox.critical(self.main_window, "错误", f"窗口捕获初始化失败:\n{e}")
             return
 
-        grid_rows = self.main_window.rec_grid_rows.value()
-        grid_cols = self.main_window.rec_grid_cols.value()
-        stage_name = self.main_window.rec_stage_name.text().strip() or None
-        stage_code = self.main_window.rec_stage_code.text().strip() or None
         initial_item_count = self.main_window.rec_initial_item_count.value()
         support_count = 1 if self.main_window.rec_chk_support_op.isChecked() else 0
         debug_keys = set(self.main_window.combo_rec_debug.checked_data())
@@ -314,10 +299,8 @@ class RecorderTab(QWidget):
         QApplication.processEvents()
 
         ocr = None
-        ocr_engine_choice = self.main_window.combo_ocr_engine.currentData()
-        ocr_engine = None if ocr_engine_choice == "auto" else ocr_engine_choice
         try:
-            ocr = OCREngine(engine=ocr_engine, debug=rec_debug, use_gpu=True)
+            ocr = OCREngine(engine=None, debug=rec_debug, use_gpu=True)
         except Exception as e:
             overlay.close_overlay()
             QMessageBox.critical(self.main_window, "错误", f"OCR 初始化失败:\n{e}")
@@ -334,10 +317,7 @@ class RecorderTab(QWidget):
         self.main_window._recorder = ActionRecorder(
             capture=self.main_window._recorder_capture,
             timer=self.main_window._region_timer,
-            grid_rows=grid_rows,
-            grid_cols=grid_cols,
             stage_code=stage_code,
-            stage_name=stage_name,
             debug=rec_debug,
             debug_cost_bar=rec_debug_cost_bar,
             debug_resolver=rec_debug_resolver,
@@ -349,7 +329,6 @@ class RecorderTab(QWidget):
             matchstick_hotkeys=self.main_window.timer_tab._build_matchstick_hotkeys() or None,
             cost_bar_calibration_name=self.main_window.combo_timer_cost_tag.currentData() or None,
             ocr=ocr,
-            avatar_model_name=self.main_window.combo_avatar_model.currentData(),
             resolver_log_callback=_resolver_log if rec_debug_resolver else None,
         )
         self.main_window._recorder_overlay = overlay

@@ -50,6 +50,7 @@ from core.cost_bar_start import CostBarStartDetector
 from core.cost_bar_sync import CostBarSync
 from core.cost_bar_sync_cc import CostBarSyncCC
 from core.cost_bar_calibration import list_calibrations
+from core.logging_utils import set_verbose
 from models.script_schema import ScriptModel
 import action
 
@@ -59,6 +60,9 @@ class Runner:
         import time
         self.debug = debug
         self.cost_tag = cost_tag
+
+        if self.debug:
+            set_verbose(True)
 
         # 先注册热键，确保在后续耗时初始化（OCR 加载等）过程中 F12 也能被响应
         self._running = False
@@ -312,15 +316,15 @@ class Runner:
         script = ScriptModel(**data)
         self.executor.load_script(script, borrow_support=borrow_support, direct_start=direct_start)
 
-        print(f"脚本加载完成: {script.stage_name or '未命名'}")
+        print(f"脚本加载完成: {script.stage_code or '未命名'}")
         print(f"地图格子: {script.grid_rows}x{script.grid_cols}")
         print(f"操作数: {len(script.actions)}")
 
         # 自动选择关卡
-        if auto_select_stage and script.stage_name:
-            print(f"[自动选关] 尝试进入关卡: {script.stage_name}")
+        if auto_select_stage and script.stage_code:
+            print(f"[自动选关] 尝试进入关卡: {script.stage_code}")
             ok = await self.selector.enter_stage(
-                script.stage_name,
+                script.stage_code,
                 borrow_support=borrow_support,
                 support_friend_index=support_friend_index,
                 support_skill=support_skill,
@@ -426,7 +430,7 @@ class Runner:
                     break
                 label = "[无限凸图]" if loop_mode else "[漏怪检测]"
                 print(f"{label} 检测到漏怪，执行重试...")
-                ok = await self.retry_handler.handle_leak_once(script.stage_name, should_stop=lambda: self._stopping)
+                ok = await self.retry_handler.handle_leak_once(script.stage_code, should_stop=lambda: self._stopping)
                 if not ok:
                     print(f"{label} 重试进入关卡失败，停止运行")
                     break
@@ -459,7 +463,7 @@ class Runner:
                     break
                 print("[无限凸图] 重新选关并进入下一局...")
                 ok = await self.selector.enter_stage(
-                    script.stage_name,
+                    script.stage_code,
                     borrow_support=borrow_support,
                     support_friend_index=support_friend_index,
                     support_skill=support_skill,

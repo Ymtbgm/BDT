@@ -1,8 +1,47 @@
+import contextlib
+import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 import cv2
 import numpy as np
+
+from core import onnx_utils  # noqa: F401; 触发 ORT_LOGGING_LEVEL 设置
+from core.logging_utils import log_error, log_info
+
+
+@contextlib.contextmanager
+def _silence_stdout_stderr():
+    """临时把 stdout/stderr 重定向到空设备，避免模型初始化日志阻塞管道。"""
+    import sys
+    import tempfile
+
+    devnull = open(os.devnull, "w")
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = devnull
+    sys.stderr = devnull
+    _tmpout = tempfile.NamedTemporaryFile(delete=False)
+    _tmpfd = _tmpout.fileno()
+    _old_stdout_fd = os.dup(1)
+    _old_stderr_fd = os.dup(2)
+    os.dup2(_tmpfd, 1)
+    os.dup2(_tmpfd, 2)
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        devnull.close()
+        os.dup2(_old_stdout_fd, 1)
+        os.dup2(_old_stderr_fd, 2)
+        os.close(_old_stdout_fd)
+        os.close(_old_stderr_fd)
+        _tmpout.close()
+        try:
+            os.unlink(_tmpout.name)
+        except Exception:
+            pass
 
 
 class OCREngine:
@@ -23,7 +62,7 @@ class OCREngine:
         # 推理速度通常比 PaddleOCR transformers 后端更快。
         # 当前环境下 Paddle 原生静态推理需要 CUDA，无 CUDA 时直接走 PaddleX ONNX Runtime。
         if engine in ("paddle", "paddle_static"):
-            print(f"[OCR] 引擎 '{engine}' 在当前无 CUDA 环境下已映射为 PaddleX ONNX Runtime")
+            log_info(f"[OCR] 引擎 '{engine}' 在当前无 CUDA 环境下已映射为 PaddleX ONNX Runtime")
             engine = "paddlex_onnx"
         self._user_engine = engine
         self._det_model_dir = det_model_dir
@@ -49,7 +88,7 @@ class OCREngine:
                 import onnxruntime as ort
                 available = set(ort.get_available_providers())
                 if "CUDAExecutionProvider" not in available:
-                    print(
+                    log_info(
                         f"[OCR] 当前 OCR 后端需要 CUDA，"
                         f"可用 providers={available}，降级到 CPU"
                     )
@@ -145,14 +184,14 @@ class OCREngine:
                 self._backend = f"paddleocr_{engine}" if engine else "paddleocr_paddle"
                 self.device = kwargs["device"]
                 # 该标记用于前端识别 OCR 已就绪并自动最小化窗口，不在界面上显示
-                print(f"[OCR] 初始化成功: {self._backend} (模型: {self._model_size}, 设备: {self.device})")
+                log_info(f"[OCR] 初始化成功: {self._backend} (模型: {self._model_size}, 设备: {self.device})")
                 if self.debug:
                     print(f"[DEBUG] PaddleOCR(engine={engine or 'paddle'}) 构造耗时: {(t3 - t2) * 1000:.1f}ms")
                 return
             except Exception as e:
                 last_error = e
                 t3 = time.perf_counter()
-                print(f"[OCR] 后端 {engine or 'paddle'} 初始化失败: {e}")
+                log_info(f"[OCR] 后端 {engine or 'paddle'} 初始化失败: {e}")
                 if self.debug:
                     print(f"[DEBUG] PaddleOCR(engine={engine or 'paddle'}) 尝试失败耗时: {(t3 - t2) * 1000:.1f}ms")
                 continue
@@ -213,16 +252,17 @@ class OCREngine:
 
         device = "gpu:0" if use_gpu else "cpu"
         try:
-            self._ocr = create_pipeline(
-                "OCR",
-                config=config,
-                device=device,
-                engine="onnxruntime",
-            )
+            with _silence_stdout_stderr():
+                self._ocr = create_pipeline(
+                    "OCR",
+                    config=config,
+                    device=device,
+                    engine="onnxruntime",
+                )
             self._backend = "paddlex_onnx"
             self.device = device
             t1 = time.perf_counter()
-            print(
+            log_info(
                 f"[OCR] 初始化成功: {self._backend} "
                 f"(det={det_model_name}, rec={rec_model_name}, "
                 f"device={device}, det_dir={self._det_model_dir}, rec_dir={self._rec_model_dir})"
@@ -301,6 +341,112 @@ class OCREngine:
         if self.debug:
             self._save_debug(image, lines, result)
         return lines
+
+    def detect_text(
+        self, image: np.ndarray
+    ) -> List[Tuple[List[Tuple[int, int]], float]]:
+        """仅检测文字框位置，不执行识别。
+
+        返回列表，每项为 (四边形框, 检测置信度)，框为 4 个 (x, y) 点。
+        若后端无法拿到检测框，则回退到 recognize 并仅返回 bbox（检测置信度记为 0）。
+        """
+        if self._ocr is None:
+            return []
+
+        try:
+            if self._is_paddlex_backend():
+                return self._detect_text_paddlex(image)
+            return self._detect_text_paddleocr(image)
+        except Exception as e:
+            if self.debug:
+                print(f"[DEBUG] detect_text 异常，回退到 recognize: {e}")
+            # 最后兜底：用 recognize 拿框
+            try:
+                lines = self.recognize(image, min_confidence=0.3)
+                return [(line[0], 0.0) for line in lines if line and line[0]]
+            except Exception:
+                return []
+
+    def _detect_text_paddleocr(
+        self, image: np.ndarray
+    ) -> List[Tuple[List[Tuple[int, int]], float]]:
+        """PaddleOCR 后端：通过 predict 结果取 dt_polys 与 dt_scores，拿不到则取 rec_polys/rec_scores。"""
+        raw_result = self._ocr.predict(image)
+        boxes: List[Tuple[List[Tuple[int, int]], float]] = []
+        for res in raw_result:
+            data = res.json if hasattr(res, "json") else {}
+            if not data or "res" not in data:
+                continue
+            res_data = data["res"]
+            polys = res_data.get("dt_polys") or res_data.get("rec_polys", [])
+            # 检测置信度优先用 dt_scores；没有时回退到识别置信度 rec_scores
+            scores = (
+                res_data.get("dt_scores")
+                or res_data.get("det_scores")
+                or res_data.get("rec_scores", [])
+            )
+            for i, poly in enumerate(polys):
+                if poly is None:
+                    continue
+                conf = float(scores[i]) if i < len(scores) else 0.0
+                boxes.append(
+                    (
+                        poly.tolist() if hasattr(poly, "tolist") else list(poly),
+                        conf,
+                    )
+                )
+        return boxes
+
+    def _detect_text_paddlex(
+        self, image: np.ndarray
+    ) -> List[Tuple[List[Tuple[int, int]], float]]:
+        """PaddleX 后端：取检测多边形 dt_polys 与 dt_scores，拿不到则取 rec_polys。"""
+        # PaddleX 期望 3 通道 BGR，且对极小图会报错，先补齐
+        proc = image
+        if proc.ndim == 2:
+            proc = cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR)
+        elif proc.shape[2] == 4:
+            proc = cv2.cvtColor(proc, cv2.COLOR_BGRA2BGR)
+
+        min_h, min_w = 64, 64
+        h, w = proc.shape[:2]
+        if h < min_h or w < min_w:
+            pad_top = (min_h - h) // 2 if h < min_h else 0
+            pad_bottom = (min_h - h) - pad_top if h < min_h else 0
+            pad_left = (min_w - w) // 2 if w < min_w else 0
+            pad_right = (min_w - w) - pad_left if w < min_w else 0
+            proc = cv2.copyMakeBorder(
+                proc,
+                pad_top,
+                pad_bottom,
+                pad_left,
+                pad_right,
+                cv2.BORDER_CONSTANT,
+                value=(255, 255, 255),
+            )
+
+        result = list(
+            self._ocr.predict(
+                proc,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+        )[0]
+        polys = result.get("dt_polys") or result.get("rec_polys", [])
+        scores = result.get("dt_scores") or result.get("det_scores", [])
+        boxes: List[Tuple[List[Tuple[int, int]], float]] = []
+        for i, poly in enumerate(polys):
+            if poly is None:
+                continue
+            conf = float(scores[i]) if i < len(scores) else 0.0
+            boxes.append(
+                (
+                    poly.tolist() if hasattr(poly, "tolist") else list(poly),
+                    conf,
+                )
+            )
+        return boxes
 
     def _save_debug(self, original: np.ndarray, lines: list, raw_result=None):
         """debug 模式下保存截图及 OCR 结果到 debug/ 目录。"""

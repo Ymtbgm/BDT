@@ -1,3 +1,5 @@
+import atexit
+import ctypes
 import threading
 import time
 from pathlib import Path
@@ -12,6 +14,46 @@ from core.cost_bar_start import CostBarStartDetector
 from core.cost_bar_sync import CostBarSync
 from core.cost_bar_sync_cc import CostBarSyncCC
 import core.constants as constants
+
+
+class _TimerResolutionManager:
+    """封装 Windows timeBeginPeriod/timeEndPeriod，支持引用计数和 atexit 清理。"""
+
+    _lock = threading.Lock()
+    _refcount = 0
+
+    @classmethod
+    def request(cls, resolution_ms: int = constants.TIMER_RESOLUTION_MS) -> bool:
+        with cls._lock:
+            if cls._refcount == 0:
+                try:
+                    ctypes.windll.winmm.timeBeginPeriod(resolution_ms)
+                except Exception:
+                    return False
+            cls._refcount += 1
+            return True
+
+    @classmethod
+    def release(cls, resolution_ms: int = constants.TIMER_RESOLUTION_MS) -> bool:
+        with cls._lock:
+            if cls._refcount <= 0:
+                return False
+            cls._refcount -= 1
+            if cls._refcount == 0:
+                try:
+                    ctypes.windll.winmm.timeEndPeriod(resolution_ms)
+                except Exception:
+                    return False
+            return True
+
+    @classmethod
+    def release_all(cls):
+        with cls._lock:
+            while cls._refcount > 0:
+                cls.release()
+
+
+atexit.register(_TimerResolutionManager.release_all)
 
 
 CostBarSyncType = Union[CostBarSync, CostBarSyncCC]
@@ -174,13 +216,16 @@ class RegionStateTimer:
         fast_to_fast2x_compensation_frames: float = 0.0,
         fast2x_to_fast_compensation_frames: float = 0.0,
         rate_transition_cooldown_frames: int = constants.RATE_TRANSITION_COOLDOWN_FRAMES,
-        sampler_interval_ms: float = 7.0,
+        sampler_interval_ms: float = constants.RATE_SAMPLER_INTERVAL_MS,
         cost_template_path: Optional[str] = None,
         debug: bool = False,
         matchstick_hotkeys: Optional[dict] = None,
         use_template_matching: bool = True,
         rate_template_dir: Optional[str] = None,
         cost_bar_calibration_name: Optional[str] = None,
+        high_precision: bool = False,
+        timekeeper_interval_ms: float = constants.TIMER_HIGH_PRECISION_INTERVAL_MS,
+        timekeeper_sleep_ratio: float = constants.TIMER_HIGH_PRECISION_SLEEP_RATIO,
     ):
         self.capture = capture
         self._pause_key = pause_key
@@ -199,6 +244,15 @@ class RegionStateTimer:
         self.rate_transition_cooldown_frames = rate_transition_cooldown_frames
         self._sampler_interval_ms = sampler_interval_ms
         self.debug = debug
+        self._high_precision = high_precision
+        # TimeKeeper 与采样周期对齐，避免倍率信息未更新时无意义高频 tick
+        self._timekeeper_interval_ms = sampler_interval_ms
+        self._timekeeper_sleep_ratio = timekeeper_sleep_ratio
+
+        # 高精度模式下的 TimeKeeper 线程
+        self._timekeeper_thread: Optional[threading.Thread] = None
+        self._timekeeper_stop_event = threading.Event()
+        self._timekeeper_started = False
 
         # 划火柴热键配置：{"select_operator": {"key": "r", "compensation_ms": 2.0}, ...}
         self._matchstick_hotkeys = matchstick_hotkeys or {}
@@ -278,6 +332,13 @@ class RegionStateTimer:
         self._sampler_thread: Optional[threading.Thread] = None
         self._sampler_stop_event = threading.Event()
 
+        # 高精度模式下的异步 ROI 捕获线程
+        self._async_capture_thread: Optional[threading.Thread] = None
+        self._async_capture_stop_event = threading.Event()
+        self._latest_roi_frame: Optional[np.ndarray] = None
+        self._latest_roi_lock = threading.Lock()
+        self._latest_roi_time: Optional[float] = None
+
         # 费用条同步线程：避免同步耗时阻塞 tick
         self._cost_sync_thread: Optional[threading.Thread] = None
         self._cost_sync_stop_event = threading.Event()
@@ -341,32 +402,36 @@ class RegionStateTimer:
             img = self.capture.capture_roi(*self.roi_b)
             if img.size == 0:
                 return None, None, None
-            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-            white = int(np.sum(gray > self.threshold))
-
-            if self._rate_matcher is not None and self._rate_matcher.available:
-                score_fast, score_slow, score_fast2x, mean_diff, state = self._rate_matcher.match(gray)
-                self._last_stable_rate_state = state
-                if state == _RateTemplateMatcher.STATE_FAST:
-                    rate = 1.0
-                elif state == _RateTemplateMatcher.STATE_FAST2X:
-                    rate = self.fast2x_rate
-                else:
-                    rate = self.slow_rate
-                return white, rate, state
-
-            # 回退：白像素阈值（无法区分 1x/2x，统一视为 1x）
-            rate: Optional[float] = None
-            if white > self.b_fast_threshold:
-                rate = 1.0
-            elif white < self.b_slow_threshold:
-                rate = self.slow_rate
-            state = "fast" if rate == 1.0 else "slow" if rate == self.slow_rate else None
-            return white, rate, state
+            return self._match_rate_state(img)
         except Exception as e:
             if self.debug:
                 print(f"[区域计时] ROI {self.roi_b} 截取失败: {e}")
             return None, None, None
+
+    def _match_rate_state(self, img_bgra: np.ndarray) -> Tuple[Optional[int], Optional[float], Optional[str]]:
+        """对已经截取到的 BGRA 图像做灰度转换、白像素计数和倍率模板匹配。"""
+        gray = cv2.cvtColor(img_bgra, cv2.COLOR_BGRA2GRAY)
+        white = int(np.sum(gray > self.threshold))
+
+        if self._rate_matcher is not None and self._rate_matcher.available:
+            score_fast, score_slow, score_fast2x, mean_diff, state = self._rate_matcher.match(gray)
+            self._last_stable_rate_state = state
+            if state == _RateTemplateMatcher.STATE_FAST:
+                rate = 1.0
+            elif state == _RateTemplateMatcher.STATE_FAST2X:
+                rate = self.fast2x_rate
+            else:
+                rate = self.slow_rate
+            return white, rate, state
+
+        # 回退：白像素阈值（无法区分 1x/2x，统一视为 1x）
+        rate: Optional[float] = None
+        if white > self.b_fast_threshold:
+            rate = 1.0
+        elif white < self.b_slow_threshold:
+            rate = self.slow_rate
+        state = "fast" if rate == 1.0 else "slow" if rate == self.slow_rate else None
+        return white, rate, state
 
     def _white_count(self, roi: Tuple[int, int, int, int]) -> Optional[int]:
         """旧版兼容：返回 ROI 白像素计数。"""
@@ -482,6 +547,8 @@ class RegionStateTimer:
         """启动区域 B 高频采样线程。"""
         self._stop_rate_sampler()
         self._sampler_stop_event.clear()
+        if self._high_precision:
+            self._start_async_capture()
         self._sampler_thread = threading.Thread(
             target=self._rate_sampler_loop, daemon=True
         )
@@ -493,6 +560,45 @@ class RegionStateTimer:
             self._sampler_stop_event.set()
             self._sampler_thread.join(timeout=0.5)
             self._sampler_thread = None
+        self._stop_async_capture()
+
+    def _start_async_capture(self):
+        """高精度模式下启动独立的 ROI 捕获线程。"""
+        self._stop_async_capture()
+        self._async_capture_stop_event.clear()
+        self._async_capture_thread = threading.Thread(
+            target=self._async_capture_loop, daemon=True
+        )
+        self._async_capture_thread.start()
+        if self.debug:
+            print("[区域计时] 高精度异步 ROI 捕获线程已启动")
+
+    def _stop_async_capture(self):
+        """停止 ROI 捕获线程。"""
+        if self._async_capture_thread is not None:
+            self._async_capture_stop_event.set()
+            self._async_capture_thread.join(timeout=0.5)
+            self._async_capture_thread = None
+            with self._latest_roi_lock:
+                self._latest_roi_frame = None
+                self._latest_roi_time = None
+
+    def _async_capture_loop(self):
+        """持续捕获区域 B 并更新缓存，供采样线程读取。"""
+        while not self._async_capture_stop_event.is_set():
+            try:
+                img = self.capture.capture_roi(*self.roi_b)
+                if img.size > 0:
+                    with self._latest_roi_lock:
+                        self._latest_roi_frame = img
+                        self._latest_roi_time = time.perf_counter()
+                else:
+                    time.sleep(0.001)
+            except Exception as e:
+                if self.debug:
+                    print(f"[区域计时] 异步 ROI 捕获失败: {e}")
+                time.sleep(0.001)
+            # 正常路径不 sleep：高精度模式允许高 CPU 占用，捕获耗时自然节流
 
     def _start_cost_sync(self):
         """启动费用条同步线程。"""
@@ -509,6 +615,102 @@ class RegionStateTimer:
             self._cost_sync_stop_event.set()
             self._cost_sync_thread.join(timeout=0.5)
             self._cost_sync_thread = None
+
+    def _start_timekeeper(self):
+        """启动高精度 TimeKeeper 线程（仅在 started=True 后调用）。"""
+        self._stop_timekeeper()
+        self._timekeeper_stop_event.clear()
+        self._timekeeper_thread = threading.Thread(
+            target=self._timekeeper_loop, daemon=True
+        )
+        self._timekeeper_thread.start()
+        self._timekeeper_started = True
+        if self.debug:
+            print(f"[区域计时] TimeKeeper 启动，周期 {self._sampler_interval_ms}ms")
+
+    def _stop_timekeeper(self):
+        """停止 TimeKeeper 线程。"""
+        if self._timekeeper_thread is not None:
+            self._timekeeper_stop_event.set()
+            self._timekeeper_thread.join(timeout=1.0)
+            self._timekeeper_thread = None
+            self._timekeeper_started = False
+            if self.debug:
+                print("[区域计时] TimeKeeper 已停止")
+
+    def _timekeeper_loop(self):
+        """高精度计时循环：每个新的区域 B 采样完成时处理一次 tick。
+
+        与固定周期不同，这里以“采样完成”作为 tick 边界，确保 timekeeper
+        处理某个样本时，该样本已经反映了本次采样期间可能发生的倍率变化。
+        如果本 tick 内有鼠标点击且视觉倍率发生变化，就在点击时刻切分。
+        """
+        last_sample_ts: Optional[float] = None
+
+        while not self._timekeeper_stop_event.is_set():
+            new_samples = []
+            with self._lock:
+                if self._rate_samples:
+                    latest_ts = self._rate_samples[-1][0]
+                    if last_sample_ts is None:
+                        # 首次运行：处理已有的最新样本，避免追 backlog 造成突发
+                        new_samples = [
+                            s for s in self._rate_samples
+                            if s[0] > (self._last_tick_time or 0)
+                        ]
+                        if new_samples:
+                            last_sample_ts = new_samples[-1][0]
+                    elif latest_ts > last_sample_ts:
+                        new_samples = [
+                            s for s in self._rate_samples if s[0] > last_sample_ts
+                        ]
+                        if new_samples:
+                            last_sample_ts = new_samples[-1][0]
+
+            if not new_samples:
+                # 没有新样本时小睡等待，避免空转
+                if self._timekeeper_stop_event.wait(0.001):
+                    break
+                continue
+
+            for sample in new_samples:
+                if self._timekeeper_stop_event.is_set():
+                    break
+                self._process_timekeeper_tick(sample)
+
+    def _process_timekeeper_tick(self, sample: Tuple[float, Optional[int], float, Optional[str]]):
+        """处理单个采样对应的 tick：以视觉采样完成时刻作为倍率切换点。"""
+        sample_ts, count_b, rate_curr, latest_state = sample
+
+        with self._lock:
+            start_time = self._last_tick_time
+            if start_time is None:
+                # 第一次 tick，以上一个采样间隔为基准
+                start_time = sample_ts - self._sampler_interval_ms / 1000.0
+                self._rate = rate_curr if rate_curr is not None else self._rate
+            rate_prev = self._rate
+            if rate_curr is None:
+                rate_curr = self._rate
+
+        if self.debug and rate_prev != rate_curr:
+            print(
+                f"[区域计时] TimeKeeper tick: "
+                f"start={(start_time - sample_ts)*1000:.2f}ms "
+                f"end=0.00ms "
+                f"rate_prev={rate_prev:.1f}x rate_curr={rate_curr:.1f}x"
+            )
+
+        self._update_time(current_rate=rate_curr, end_time=sample_ts)
+
+        # 同步显示用倍率到最新采样
+        if rate_curr != self._rate:
+            with self._lock:
+                self._rate = rate_curr
+            if self.debug:
+                print(
+                    f"[区域计时] TimeKeeper 倍率切换为 {self._rate}, "
+                    f"state={latest_state}"
+                )
 
     def _cost_sync_loop(self):
         """周期性执行费用条同步修正，避免阻塞 tick。"""
@@ -527,21 +729,55 @@ class RegionStateTimer:
 
     def _rate_sampler_loop(self):
         """以 _sampler_interval_ms 为间隔持续采样区域 B 倍率。"""
+        prev_rate: Optional[float] = None
+        prev_t1: Optional[float] = None
         while not self._sampler_stop_event.is_set():
             try:
                 t0 = time.perf_counter()
-                count_b, rate, state = self._capture_rate_state()
+
+                if self._high_precision:
+                    with self._latest_roi_lock:
+                        img = self._latest_roi_frame
+                        capture_ts = self._latest_roi_time
+                    if img is None:
+                        time.sleep(0.001)
+                        continue
+                    count_b, rate, state = self._match_rate_state(img)
+                    # 用缓存捕获完成时间作为样本时间戳；若无则用当前时间
+                    t1 = capture_ts if capture_ts is not None else time.perf_counter()
+                else:
+                    count_b, rate, state = self._capture_rate_state()
+                    t1 = time.perf_counter()
+
                 if rate is None:
                     rate = self._rate
-                sample = (t0, count_b, rate, state)
+
+                sample = (t1, count_b, rate, state)
                 with self._lock:
                     self._rate_samples.append(sample)
                     # 只保留最近 200ms 样本，避免无限增长
-                    cutoff = t0 - 0.2
+                    cutoff = t1 - 0.2
                     self._rate_samples = [
                         s for s in self._rate_samples if s[0] > cutoff
                     ]
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+                # 采样线程实际耗时（仅用于 sleep 计算），与样本时间戳 t1 解耦
+                sampler_now = time.perf_counter()
+                elapsed_ms = (sampler_now - t0) * 1000.0
+                interval_ms = (t1 - prev_t1) * 1000.0 if prev_t1 is not None else 0.0
+                if self.debug and (prev_rate is None or prev_rate != rate):
+                    rate_from = f"{prev_rate:.1f}x" if prev_rate is not None else "None"
+                    print(
+                        f"[区域计时] 采样线程 rate_change: "
+                        f"match={elapsed_ms:.2f}ms "
+                        f"interval={interval_ms:.2f}ms "
+                        f"rate={rate_from}->{rate:.1f}x "
+                        f"state={state}"
+                    )
+                prev_rate = rate
+                prev_t1 = t1
+
+                # 高精度模式下采样线程只负责 match，按固定间隔 sleep
                 sleep_ms = max(0.0, self._sampler_interval_ms - elapsed_ms)
                 if sleep_ms > 0:
                     time.sleep(sleep_ms / 1000.0)
@@ -568,6 +804,14 @@ class RegionStateTimer:
         if not samples:
             return None
         return sum(samples) / len(samples)
+
+    def _get_rate_at(self, timestamp: float) -> float:
+        """返回 timestamp 时刻（含）之前最近的倍率样本。"""
+        with self._lock:
+            for ts, _, rate, _ in reversed(self._rate_samples):
+                if ts <= timestamp:
+                    return rate
+            return self._rate
 
     def _match_cost_max(self, roi_gray: np.ndarray) -> float:
         """检测费用条 ROI 是否出现 MAX 字样。"""
@@ -697,7 +941,11 @@ class RegionStateTimer:
         self._unregister_hotkey()
         self._register_hotkey()
 
-    def _update_time(self, current_rate: Optional[float] = None):
+    def _update_time(
+        self,
+        current_rate: Optional[float] = None,
+        end_time: Optional[float] = None,
+    ):
         """根据本周期内的暂停键事件，累加经过的游戏时间。
 
         事件队列中的每个切换点都会把区间切成若干段，运行段按当前倍率累计，
@@ -706,19 +954,22 @@ class RegionStateTimer:
         注意：结束时的 paused 状态由本周期内最后处理的事件决定，而不是调用方
         在 tick() 开头捕获的 current_paused。这样可以避免事件在捕获和调用
         _update_time 之间到达导致的 _prev_paused 不同步问题。
-        """
-        now = time.perf_counter()
-        if self._started and self._last_tick_time is not None:
-            # 限制极端卡顿（如切出游戏）导致的跳秒
-            raw_delta_ms = (now - self._last_tick_time) * 1000.0
-            max_delta_ms = self.frame_ms * 5.0
-            if raw_delta_ms > max_delta_ms:
-                if self.debug:
-                    print(f"[区域计时] 单帧延迟 {raw_delta_ms:.1f}ms，Clamp 到 {max_delta_ms:.1f}ms")
-                raw_delta_ms = max_delta_ms
-                now = self._last_tick_time + raw_delta_ms / 1000.0
 
-            with self._lock:
+        整个函数在 self._lock 保护下执行，避免 GUI 轮询和录制线程并发调用时
+        重复处理同一区间或覆盖 _last_tick_time，导致时间跳跃或暂停失效。
+        """
+        with self._lock:
+            now = end_time if end_time is not None else time.perf_counter()
+            if self._started and self._last_tick_time is not None:
+                # 限制极端卡顿（如切出游戏）导致的跳秒
+                raw_delta_ms = (now - self._last_tick_time) * 1000.0
+                max_delta_ms = self.frame_ms * 5.0
+                if raw_delta_ms > max_delta_ms:
+                    if self.debug:
+                        print(f"[区域计时] 单帧延迟 {raw_delta_ms:.1f}ms，Clamp 到 {max_delta_ms:.1f}ms")
+                    raw_delta_ms = max_delta_ms
+                    now = self._last_tick_time + raw_delta_ms / 1000.0
+
                 start_paused = self._prev_paused
                 rate = current_rate if current_rate is not None else self._rate
                 # 取出并清理本周期内的事件
@@ -730,33 +981,31 @@ class RegionStateTimer:
                     ep for ep in self._toggle_events if ep[0] > now
                 ]
 
-            # 按事件时间点切分区间
-            segments = []
-            seg_start = self._last_tick_time
-            seg_paused = start_paused
-            for toggle_time, new_paused in sorted(events, key=lambda x: x[0]):
-                if seg_start <= toggle_time <= now:
-                    segments.append((seg_start, toggle_time, seg_paused))
-                    seg_start = toggle_time
-                    seg_paused = new_paused
-            segments.append((seg_start, now, seg_paused))
+                # 按事件时间点切分区间
+                segments = []
+                seg_start = self._last_tick_time
+                seg_paused = start_paused
+                for toggle_time, new_paused in sorted(events, key=lambda x: x[0]):
+                    if seg_start <= toggle_time <= now:
+                        segments.append((seg_start, toggle_time, seg_paused))
+                        seg_start = toggle_time
+                        seg_paused = new_paused
+                segments.append((seg_start, now, seg_paused))
 
-            # 累加各段游戏时间
-            counted_ms = 0.0
-            for seg_start, seg_end, seg_paused in segments:
-                if seg_paused:
-                    continue
-                duration_ms = (seg_end - seg_start) * 1000.0
-                counted_ms += duration_ms * rate
+                # 累加各段游戏时间
+                counted_ms = 0.0
+                for seg_start, seg_end, seg_paused in segments:
+                    if seg_paused:
+                        continue
+                    duration_ms = (seg_end - seg_start) * 1000.0
+                    counted_ms += duration_ms * rate
 
-            with self._lock:
                 self._scaled_elapsed_ms += counted_ms
                 # 周期结束时的 paused 状态以最后一段为准，避免传入的 current_paused 滞后
                 self._prev_paused = seg_paused
-        else:
-            with self._lock:
+            else:
                 self._prev_paused = self._paused
-        self._last_tick_time = now
+            self._last_tick_time = now
 
     def _wait_for_initial_state(self, timeout: float = 30.0, interval: float = 0.01):
         print("[区域计时] 等待初始状态: 区域B为1.0x...")
@@ -795,6 +1044,10 @@ class RegionStateTimer:
             use_cost_detection and self._cost_template is not None
         )
         self._cost_detector = None
+        # 高精度模式：请求 1ms 系统定时器分辨率
+        if self._high_precision:
+            _TimerResolutionManager.request()
+        self._timekeeper_started = False
         self._register_hotkey()
         self._start_rate_sampler()
         self._start_cost_sync()
@@ -812,9 +1065,12 @@ class RegionStateTimer:
 
     def stop(self):
         self._running = False
+        self._stop_timekeeper()
         self._stop_rate_sampler()
         self._stop_cost_sync()
         self._unregister_hotkey()
+        if self._high_precision:
+            _TimerResolutionManager.release()
 
     def pause(self):
         now = time.perf_counter()
@@ -847,6 +1103,7 @@ class RegionStateTimer:
             return self._paused
 
     def reset(self):
+        self._stop_timekeeper()
         with self._lock:
             self._scaled_elapsed_ms = 0.0
             self._started = False
@@ -865,7 +1122,19 @@ class RegionStateTimer:
         self._last_tick_time = None
 
     def get_elapsed_ms(self) -> float:
-        self._update_time()
+        """返回当前游戏时间（毫秒）。
+
+        高精度模式下直接返回 TimeKeeper 维护的快照，避免在调用线程中再次
+        执行 _update_time() 造成竞争或抖动。
+        """
+        if self._high_precision and self._running:
+            return self.get_elapsed_ms_fast()
+        with self._lock:
+            self._update_time()
+            return self._scaled_elapsed_ms
+
+    def get_elapsed_ms_fast(self) -> float:
+        """无锁快照读取，仅在高精度模式下由 UI 线程调用。"""
         return self._scaled_elapsed_ms
 
     def is_running(self) -> bool:
@@ -895,6 +1164,12 @@ class RegionStateTimer:
             }
 
             if not self._started:
+                # 手动暂停期间不推进启动检测，避免重置后点击“继续”时
+                # 检测器已经提前到达 DONE 状态而直接开始计时。
+                if self._paused:
+                    info["elapsed_ms"] = self._scaled_elapsed_ms
+                    return info
+
                 if self._use_cost_detection and self._cost_detector is not None:
                     offset_ms = self._cost_detector.tick()
                     if offset_ms is not None and not self._paused:
@@ -928,7 +1203,21 @@ class RegionStateTimer:
                 info["elapsed_ms"] = self._scaled_elapsed_ms
                 return info
 
-            # 运行阶段：用采样线程的最近样本判断离散倍率，用区间平均倍率累加时间
+            # 启动完成后，高精度模式启动 TimeKeeper 负责累加时间
+            if self._started and self._high_precision and not self._timekeeper_started:
+                self._start_timekeeper()
+
+            if self._started and self._high_precision:
+                # 高精度模式下 UI tick 只负责显示，不修改计时状态
+                latest_count_b, _, latest_state = self._get_latest_sample()
+                info["count_b"] = latest_count_b
+                info["state"] = latest_state
+                info["elapsed_ms"] = self.get_elapsed_ms_fast()
+                info["paused"] = self._paused
+                info["rate"] = self._rate
+                return info
+
+            # 运行阶段：用采样线程的最近样本判断离散倍率，切换点以视觉采样为准
             latest_count_b, latest_rate, latest_state = self._get_latest_sample()
             info["count_b"] = latest_count_b
             info["state"] = latest_state
@@ -937,13 +1226,22 @@ class RegionStateTimer:
             self._prev_rate = self._rate
             new_rate = latest_rate if latest_rate is not None else self._rate
 
-            # 用本 tick 区间内的平均倍率累加游戏时间
+            # 用本 tick 区间内的离散倍率累加游戏时间；切换点以视觉采样为准
             now = time.perf_counter()
-            avg_rate = self._get_average_rate(self._last_tick_time, now) if self._last_tick_time is not None else None
-            if avg_rate is None:
-                avg_rate = new_rate
+            start_time = self._last_tick_time
+            rate_prev = (
+                self._get_rate_at(start_time)
+                if start_time is not None
+                else self._rate
+            )
+            self._update_time(current_rate=new_rate)
 
-            self._update_time(current_rate=avg_rate)
+            if self.debug and rate_prev != new_rate:
+                print(
+                    f"[区域计时] tick 倍率变化: "
+                    f"{rate_prev:.1f}x->{new_rate:.1f}x, "
+                    f"state={latest_state}"
+                )
 
             # 区域 B 倍率判断（带迟滞，避免阈值附近反复切换导致重复补偿）
             if new_rate != self._rate:
