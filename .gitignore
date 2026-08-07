@@ -28,7 +28,6 @@ env/
 
 # PyInstaller
 *.manifest
-*.spec
 *.spec.bak
 *.7z
 *.zip
