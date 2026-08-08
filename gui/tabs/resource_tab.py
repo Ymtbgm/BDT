@@ -156,8 +156,7 @@ class ResourceTab(QWidget):
     def _on_check_finished(self, update_available: bool, info_dict: dict | None, silent: bool = False):
         if not update_available:
             self.main_window.label_levels_update_status.setText("状态: 已是最新版本")
-            if silent:
-                Toast.show_message(self.main_window, "levels.json 已是最新版本")
+            # 静默模式下「已是最新」不弹窗打扰用户
             return
 
         size = info_dict.get("size", 0)
@@ -179,20 +178,32 @@ class ResourceTab(QWidget):
             self.main_window.label_levels_update_status.setText(f"状态: {message}")
             self.main_window.resource_status.setText("状态: 已通过自动更新同步")
             if silent:
-                Toast.show_message(self.main_window, f"levels.json {message}")
+                Toast.show_message(
+                    self.main_window,
+                    "levels.json 更新完成",
+                    Toast.Type.SUCCESS,
+                )
             else:
                 QMessageBox.information(self.main_window, "更新成功", message)
         else:
             self.main_window.label_levels_update_status.setText(f"状态: 更新失败 - {message}")
             if silent:
-                Toast.show_message(self.main_window, f"levels.json 更新失败: {message}")
+                Toast.show_message(
+                    self.main_window,
+                    f"levels.json 更新失败: {message}",
+                    Toast.Type.ERROR,
+                )
             else:
                 QMessageBox.critical(self.main_window, "更新失败", message)
 
     def _on_error(self, message: str, silent: bool = False):
         self.main_window.label_levels_update_status.setText(f"状态: 检查失败 - {message}")
         if silent:
-            Toast.show_message(self.main_window, f"levels.json 检查失败: {message}")
+            Toast.show_message(
+                self.main_window,
+                f"levels.json 检查失败: {message}",
+                Toast.Type.ERROR,
+            )
         else:
             QMessageBox.critical(self.main_window, "检查失败", message)
 
