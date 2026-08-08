@@ -1,12 +1,12 @@
-"""右下角自动消失提示（Toast）。"""
+"""右下角自动消失提示（Toast），支持多个 Toast 堆叠显示。"""
 
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QApplication, QGraphicsOpacityEffect, QSizePolicy
 
 
 class Toast(QWidget):
-    """在屏幕右下角显示一条自动消失的提示。
+    """在屏幕右下角显示一条自动消失的提示，多个 Toast 会自动向上堆叠。
 
     使用示例：
         Toast.show_message(parent, "更新完成", Toast.Type.SUCCESS)
@@ -19,6 +19,8 @@ class Toast(QWidget):
         ERROR = "error"
 
     DEFAULT_DURATION_MS = 5000
+    MARGIN = 24
+    GAP = 12
 
     _TYPE_COLORS = {
         Type.INFO: "#6495ED",
@@ -26,6 +28,8 @@ class Toast(QWidget):
         Type.WARNING: "#FFC107",
         Type.ERROR: "#FF6B6B",
     }
+
+    _active_toasts: list["Toast"] = []
 
     def __init__(
         self,
@@ -49,7 +53,6 @@ class Toast(QWidget):
 
         self._setup_ui(message)
         self._setup_animation()
-        self._position_on_screen()
 
     def _setup_ui(self, message: str):
         dot_color = self._TYPE_COLORS.get(self._toast_type, self._TYPE_COLORS[self.Type.INFO])
@@ -114,18 +117,38 @@ class Toast(QWidget):
         QTimer.singleShot(self._duration_ms, self._start_fade)
 
     def _start_fade(self):
+        # 开始淡出时从堆叠列表移除，并重新排列剩余 Toast
+        if self in Toast._active_toasts:
+            Toast._active_toasts.remove(self)
+            Toast._reposition_all()
         self._fade_animation.start()
 
-    def _position_on_screen(self):
+    def _position_for_index(self, index: int) -> QPoint:
+        """计算指定索引 Toast 的左上角坐标（从底部向上堆叠）。"""
         screen = QApplication.primaryScreen().availableGeometry()
-        margin = 24
-        x = screen.right() - self.width() - margin
-        y = screen.bottom() - self.height() - margin
-        self.move(QPoint(x, y))
+        x = screen.right() - self.width() - self.MARGIN
+        y = screen.bottom() - self.height() - self.MARGIN
+        # index 0 是最下面，向上递增
+        for i in range(index):
+            if i < len(Toast._active_toasts):
+                y -= Toast._active_toasts[i].height() + self.GAP
+        return QPoint(x, y)
+
+    def _reposition(self):
+        """根据当前在列表中的位置移动自己。"""
+        if self in Toast._active_toasts:
+            idx = Toast._active_toasts.index(self)
+            self.move(self._position_for_index(idx))
+
+    @classmethod
+    def _reposition_all(cls):
+        """重新排列所有激活的 Toast。"""
+        for toast in cls._active_toasts:
+            toast._reposition()
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._position_on_screen()
+        self._reposition()
 
     @classmethod
     def show_message(
@@ -137,5 +160,7 @@ class Toast(QWidget):
     ):
         """创建并显示一条 Toast。"""
         toast = cls(parent, message, toast_type, duration_ms)
+        cls._active_toasts.append(toast)
+        cls._reposition_all()
         toast.show()
         return toast

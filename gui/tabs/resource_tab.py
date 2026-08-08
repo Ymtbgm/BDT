@@ -165,10 +165,9 @@ class ResourceTab(QWidget):
             f"发现新版本 (size: {size}, updated_at: {updated_at})"
         )
         if silent:
-            size_mb = size / 1024 / 1024
             Toast.show_message(
                 self.main_window,
-                f"发现新版本，开始下载 levels.json（约 {size_mb:.1f} MB）",
+                "发现新版本，开始下载 levels.json",
                 Toast.Type.INFO,
                 duration_ms=3000,
             )
