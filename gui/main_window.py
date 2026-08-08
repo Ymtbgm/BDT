@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import (
@@ -20,6 +19,7 @@ import action
 from core.capture import WindowCapture
 from core.region_state_timer import RegionStateTimer
 from core.recorder import ActionRecorder
+from core.paths import get_project_root, gui_template
 from gui.timer_overlay import TimerOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo
@@ -172,15 +172,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Arknights Auto")
         # 兼容开发环境与 PyInstaller onedir 打包后的图标路径
-        _icon_candidates = []
-        _dev_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        _icon_candidates.append(os.path.join(_dev_root, "core", "resource", "Icon.ico"))
-        _meipass = getattr(sys, '_MEIPASS', None)
-        if _meipass:
-            _icon_candidates.append(os.path.join(os.path.dirname(_meipass), "core", "resource", "Icon.ico"))
-            _icon_candidates.append(os.path.join(_meipass, "core", "resource", "Icon.ico"))
-        _icon_candidates.append(os.path.join(os.getcwd(), "core", "resource", "Icon.ico"))
-        _icon_path = next((p for p in _icon_candidates if os.path.exists(p)), _icon_candidates[0])
+        _icon_path = str(gui_template("Icon.ico"))
+        if not os.path.exists(_icon_path):
+            # 兜底：旧位置或当前工作目录
+            _icon_candidates = [
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "resource", "Icon.ico"),
+                os.path.join(os.getcwd(), "resource", "gui_template", "Icon.ico"),
+                os.path.join(os.getcwd(), "core", "resource", "Icon.ico"),
+            ]
+            _icon_path = next((p for p in _icon_candidates if os.path.exists(p)), _icon_path)
         self.setWindowIcon(QIcon(_icon_path))
         self.resize(1600, 900)
         self.setMinimumWidth(1280)
@@ -211,10 +211,7 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _project_root(self) -> str:
-        if getattr(sys, "frozen", False):
-            # PyInstaller 打包后：exe 所在目录即为项目根目录
-            return os.path.dirname(sys.executable)
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return str(get_project_root())
 
     def _config_path(self) -> str:
         return os.path.join(self._project_root(), "config.json")

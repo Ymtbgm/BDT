@@ -1,8 +1,8 @@
 """轻量 ONNX 数字分类器封装。
 
-加载 core/resource/models/ 下的两个分类模型：
-- num_digit_model.onnx : 费用数字 0~99，输入 (1,1,72,106)
-- X_num_model.onnx     : 数量角标 X0~X30，输入 (1,1,130,214)
+加载 resource/models/ 下的两个分类模型：
+- num/num_digit_model.onnx : 费用数字 0~99，输入 (1,1,72,106)
+- X_num_CNN/X_num_model.onnx     : 数量角标 X0~X30，输入 (1,1,130,214)
 
 预处理约定：
 - 调用方应先使用项目现有预处理（cost_recognition.preprocess_cost_image_inv、
@@ -21,18 +21,16 @@ import numpy as np
 
 from core.logging_utils import log_error, log_info
 from core.onnx_utils import create_session_options, get_onnx_providers
+from core.paths import model
 
-
-ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = ROOT / "core" / "resource" / "models"
 
 # 模型配置
-_COST_MODEL_PATH = MODEL_DIR / "num_digit_model.onnx"
-_COST_MAP_PATH = MODEL_DIR / "num_class_to_idx.json"
+_COST_MODEL_PATH = model("num", "num_digit_model.onnx")
+_COST_MAP_PATH = model("num", "num_class_to_idx.json")
 _COST_INPUT_SIZE = (106, 72)  # (W, H)
 
-_QUANTITY_MODEL_PATH = MODEL_DIR / "X_num_model.onnx"
-_QUANTITY_MAP_PATH = MODEL_DIR / "X_num_class_to_idx.json"
+_QUANTITY_MODEL_PATH = model("X_num_CNN", "X_num_model.onnx")
+_QUANTITY_MAP_PATH = model("X_num_CNN", "X_num_class_to_idx.json")
 _QUANTITY_INPUT_SIZE = (214, 130)  # (W, H)
 
 

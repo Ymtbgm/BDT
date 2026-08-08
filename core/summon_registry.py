@@ -33,8 +33,8 @@ class SummonDefinition(BaseModel):
       - skill_state_match_enabled: 是否通过头顶 ROI Logo 匹配判断技能结束（弹药/手动关闭类）
       - skill_state_roi_offset_x/y: ROI 相对于干员 normal view 屏幕中心的偏移
       - skill_state_roi_width/height: ROI 尺寸
-      - skill_state_active_template: 弹药技能期间出现的固定 logo 模板路径（相对 core/resource）
-      - skill_state_inactive_template: 技能准备完毕 logo 模板路径（相对 core/resource），可选
+      - skill_state_active_template: 弹药技能期间出现的固定 logo 模板路径（相对 resource/gui_template）
+      - skill_state_inactive_template: 技能准备完毕 logo 模板路径（相对 resource/gui_template），可选
       - skill_state_active_threshold/inactive_threshold: 模板匹配阈值
       - skill_state_consecutive_frames: 连续多少帧确认状态切换
       - skill_end_by_state_match: 为 True 时忽略 skill_duration_ms，用状态匹配触发结束重置
@@ -121,12 +121,15 @@ class SummonDefinition(BaseModel):
         return self.is_class_a() and self.skill_lock_enabled
 
 
+from core.paths import SUMMONS_DIR
+
+
 class SummonDefinitionRegistry:
     """从 JSON 文件加载并管理召唤物定义。"""
 
     def __init__(self, directory: Optional[Path] = None):
         if directory is None:
-            directory = Path(__file__).parent / "resource" / "summons"
+            directory = SUMMONS_DIR
         self.directory = directory
         self._definitions: Dict[str, SummonDefinition] = {}
         self.load()

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from core.paths import GUI_TEMPLATE_DIR
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QGraphicsDropShadowEffect,
@@ -124,7 +125,7 @@ class TimerOverlay(QWidget):
         """加载翅膀图片（优先使用已裁剪版本），缩放后返回 QLabel。"""
         label = QLabel()
         label.setStyleSheet("background-color: transparent; border: none;")
-        resource_dir = Path(__file__).parent.parent / "core" / "resource"
+        resource_dir = GUI_TEMPLATE_DIR
         # 优先使用裁剪掉透明边距的版本
         cropped_path = resource_dir / f"{Path(filename).stem}_cropped.png"
         path = cropped_path if cropped_path.exists() else resource_dir / filename

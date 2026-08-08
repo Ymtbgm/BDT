@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 from core.capture import WindowCapture, _WINDOWS_CAPTURE_AVAILABLE
 from core.region_state_timer import RegionStateTimer, _RateTemplateMatcher
 import core.constants as constants
+from core.paths import GAME_TEMPLATE_DIR
 
 _active_cap: WindowCapture | None = None
 
@@ -114,7 +115,7 @@ def benchmark_mss_with_rate_matching(window_title: str, roi: tuple, duration_s: 
     _active_cap = cap
     x, y, w, h = roi
 
-    tmpl_dir = ROOT / "core" / "resource"
+    tmpl_dir = GAME_TEMPLATE_DIR
     matcher = _RateTemplateMatcher(
         str(tmpl_dir / constants.RATE_TEMPLATE_FAST_NAME),
         str(tmpl_dir / constants.RATE_TEMPLATE_SLOW_NAME),

@@ -15,11 +15,11 @@ from core.digit_recognizer import DigitRecognizer
 from core.yolo_detector import QuantityBadgeDetector
 from core import cost_recognition
 import core.constants as constants
+from core.paths import position_data
 from models.raw_recording import RawRecording, RawAction, KeyframeType
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo, SummonInfo, SummonBinding
 
 
-ROOT = Path(__file__).resolve().parent.parent
 class _DeployInfo:
     """单个 DEPLOY 动作在预分类阶段的结果。"""
 
@@ -330,8 +330,8 @@ class OfflineResolver:
             return self._quantity_roi_calibrations
 
         candidates = [
-            ROOT / "data" / f"quantity_roi_config_total{total_slots}.json",
-            ROOT / "data" / "quantity_roi_config.json",
+            position_data(f"quantity_roi_config_total{total_slots}.json"),
+            position_data("quantity_roi_config.json"),
         ]
         calibrations = None
         for path in candidates:
@@ -440,8 +440,8 @@ class OfflineResolver:
             return self._operator_cost_roi_calibrations
 
         candidates = [
-            ROOT / "data" / f"operator_cost_roi_config_total{total_slots}.json",
-            ROOT / "data" / "operator_cost_roi_config.json",
+            position_data(f"operator_cost_roi_config_total{total_slots}.json"),
+            position_data("operator_cost_roi_config.json"),
         ]
         calibrations = None
         for path in candidates:

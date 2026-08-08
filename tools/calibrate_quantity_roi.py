@@ -304,9 +304,11 @@ def set_window_topmost(win_name: str) -> None:
         print(f"窗口置顶失败: {e}")
 
 
-LEVEL_LOGO_PATH = ROOT / "core" / "resource" / "level_logo.png"
-LEVEL_LOGO_WHITE_THRESHOLD = 200
+from core.paths import game_template
 
+
+LEVEL_LOGO_PATH = game_template("level_logo.png")
+LEVEL_LOGO_WHITE_THRESHOLD = 200
 
 def _to_binary(img: np.ndarray, threshold: int) -> np.ndarray:
     """非白色像素置黑，用于检测 level logo 等纯白标识。"""

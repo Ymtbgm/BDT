@@ -32,7 +32,7 @@ class MatchstickTab(QWidget):
         self.main_window.chk_matchstick_166 = QCheckBox("启用")
         self.main_window.chk_matchstick_166.stateChanged.connect(self.main_window._on_matchstick_enabled_changed)
         row_166.addWidget(self.main_window.chk_matchstick_166)
-        self.main_window.line_matchstick_166 = QLineEdit("space")
+        self.main_window.line_matchstick_166 = QLineEdit("p")
         self.main_window.line_matchstick_166.setMaxLength(16)
         self.main_window.line_matchstick_166.setFixedWidth(100)
         self.main_window.line_matchstick_166.textChanged.connect(self.main_window._on_matchstick_hotkey_changed)

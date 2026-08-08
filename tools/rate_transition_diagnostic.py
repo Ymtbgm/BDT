@@ -58,11 +58,13 @@ from core.region_state_timer import _RateTemplateMatcher, RegionStateTimer
 from core import constants
 
 
+from core.paths import GAME_TEMPLATE_DIR
+
 # 区域 B 默认 ROI 与 RegionStateTimer 一致
 ROI_B = RegionStateTimer.DEFAULT_ROI_B
 FPS = 60
 DURATION_S = 2.0
-TEMPLATE_DIR = ROOT / "core" / "resource"
+TEMPLATE_DIR = GAME_TEMPLATE_DIR
 
 
 def _parse_args():
@@ -335,7 +337,7 @@ class RateTransitionDiagnostic:
         )
 
         if not matcher.available:
-            print("[错误] 倍率模板加载失败，请确认 core/resource/ 下有 1X.png / 2X.png / 0.2X.png")
+            print("[错误] 倍率模板加载失败，请确认 resource/game_template/ 下有 1X.png / 2X.png / 0.2X.png")
             return
 
         cost_sync = CostBarSync(cap, debug=False)

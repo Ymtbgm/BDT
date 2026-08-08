@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.capture import WindowCapture
+from core.paths import game_template
 
 
 # 默认 ROI 为 2560x1600 分辨率下的绝对屏幕坐标
@@ -51,7 +52,7 @@ def main():
         print(f"  {label}: x={roi[0]}, y={roi[1]}, w={roi[2]}, h={roi[3]}")
     print("操作说明:")
     print("  F9  - 截取两个区域当前帧并保存")
-    print("  F10 - 保存 2x 倍率模板到 core/resource/2X.png")
+    print("  F10 - 保存 2x 倍率模板到 resource/game_template/2X.png")
     print("  ESC - 退出")
     print("若 ROI 位置不对，可修改本文件中的 DEFAULT_ROIS。")
 
@@ -71,7 +72,7 @@ def main():
             try:
                 roi = DEFAULT_ROIS["rate_2x"]
                 img = capture_region(cap, roi)
-                tmpl_path = ROOT / "core" / "resource" / "2X.png"
+                tmpl_path = game_template("2X.png")
                 cv2.imencode(".png", img)[1].tofile(str(tmpl_path))
                 gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
                 print(

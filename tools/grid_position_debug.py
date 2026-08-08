@@ -152,9 +152,11 @@ def draw_deploy_roi(
     print(f"部署位置: ({deploy_x},{deploy_y})")
     print(f"弹药 ROI: ({x1},{y1},{x2 - x1},{y2 - y1})  偏移: ({offset_x},{offset_y})")
     return canvas
+from core.paths import game_data
+
 def load_stage_info(code: str | None, name: str | None) -> dict | None:
     """从 levels.json 查找关卡信息，返回包含 width/height/view 的字典。"""
-    levels_path = Path(__file__).parent.parent / "core" / "resource" / "levels.json"
+    levels_path = game_data("levels.json")
     if not levels_path.exists():
         return None
     try:

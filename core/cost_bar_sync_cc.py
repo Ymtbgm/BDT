@@ -7,6 +7,7 @@ import numpy as np
 from core.capture import WindowCapture
 from core.cost_bar_calibration import CostBarCalibration, get_calibration
 import core.constants as constants
+from core.paths import game_template
 
 
 class CostBarSyncCC:
@@ -53,7 +54,7 @@ class CostBarSyncCC:
         # 加载费用 MAX 模板，用于检测费用条已满
         self._cost_max_template: Optional[np.ndarray] = None
         self._cost_max_mask: Optional[np.ndarray] = None
-        cost_max_path = Path(__file__).parent / "resource" / constants.COST_MAX_TEMPLATE_NAME
+        cost_max_path = game_template(constants.COST_MAX_TEMPLATE_NAME)
         self._cost_max_template, self._cost_max_mask = self._load_template_with_mask(
             str(cost_max_path)
         )

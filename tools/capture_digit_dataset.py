@@ -45,11 +45,14 @@ _BAR_TOP_RATIO = 1370 / 1600
 _BAR_HEIGHT_RATIO = 230 / 1600
 
 
+from core.paths import position_data
+
+
 def _load_calibration_config(total_slots: int, name: str) -> Optional[dict]:
     """尝试加载已有的 13+ slot 标定配置。"""
     candidates = [
-        ROOT / "data" / f"{name}_config_total{total_slots}.json",
-        ROOT / "data" / f"{name}_config.json",
+        position_data(f"{name}_config_total{total_slots}.json"),
+        position_data(f"{name}_config.json"),
     ]
     for path in candidates:
         if path.exists():

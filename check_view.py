@@ -1,9 +1,9 @@
 import json
 from collections import defaultdict
 
-from pathlib import Path
+from core.paths import game_data
 
-with open(Path(__file__).parent / "core" / "resource" / "levels.json", "r", encoding="utf-8") as f:
+with open(game_data("levels.json"), "r", encoding="utf-8") as f:
     levels = json.load(f)
 
 size_to_views = defaultdict(list)

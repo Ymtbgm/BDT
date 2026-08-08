@@ -8,6 +8,7 @@ import numpy as np
 from core.capture import WindowCapture
 from core.cost_bar_sync import CostBarSync
 from core.cost_bar_sync_cc import CostBarSyncCC
+from core.paths import game_template, PROJECT_ROOT
 
 
 CostBarSyncType = Union[CostBarSync, CostBarSyncCC]
@@ -328,7 +329,5 @@ class CostBarStartDetector:
     def default_template_path(root: Optional[Path] = None) -> Path:
         """返回默认 cost.png 路径。"""
         if root is None:
-            import sys
-
-            root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent
-        return root / "core" / "resource" / "cost.png"
+            root = PROJECT_ROOT
+        return game_template("cost.png")

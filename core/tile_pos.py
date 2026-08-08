@@ -79,12 +79,12 @@ def _guess_view(grid_cols: int, grid_rows: int) -> Tuple[Tuple[float, float, flo
     return _DEFAULT_VIEW_NORMAL, _DEFAULT_VIEW_SIDE
 
 
+from core.paths import game_data
+
+
 def _levels_json_path() -> Path:
     """返回 levels.json 的查找路径。"""
-    import sys
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "core" / "resource" / "levels.json"
-    return Path(__file__).parent / "resource" / "levels.json"
+    return game_data("levels.json")
 
 
 def _load_levels() -> list:

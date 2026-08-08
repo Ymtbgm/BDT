@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.capture import WindowCapture
 from core.region_state_timer import RegionStateTimer
+from core.paths import GAME_TEMPLATE_DIR
 
 
 def _load_template(path: str) -> Optional[np.ndarray]:
@@ -88,7 +89,7 @@ def main():
 
     # 加载与 RegionStateTimer 相同的模板
     templates = {}
-    tmpl_root = ROOT / "core" / "resource"
+    tmpl_root = GAME_TEMPLATE_DIR
     if region == "b":
         tmpl_names = ("1X", "0.2X")
     else:

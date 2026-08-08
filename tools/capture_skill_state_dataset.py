@@ -13,9 +13,11 @@ from core.capture import WindowCapture
 from core.tile_pos import TilePosCalculator
 
 
+from core.paths import game_data
+
 def load_stage_info(code: str | None, name: str | None) -> dict | None:
     """从 levels.json 查找关卡信息，返回包含 width/height/view 的字典。"""
-    levels_path = Path(__file__).parent.parent / "core" / "resource" / "levels.json"
+    levels_path = game_data("levels.json")
     if not levels_path.exists():
         return None
     try:

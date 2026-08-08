@@ -51,16 +51,18 @@ def ncc_score(roi: np.ndarray, template: np.ndarray) -> float:
     return float(np.max(result))
 
 
+from core.paths import game_data, gui_template
+
 def resolve_template_path(raw: str) -> Path:
     p = Path(raw)
     if p.is_absolute():
         return p
-    return Path(__file__).parent.parent / "core" / "resource" / raw
+    return gui_template(raw)
 
 
 def load_stage_info(code: str | None, name: str | None) -> dict | None:
     """从 levels.json 查找关卡信息，返回包含 width/height/view 的字典。"""
-    levels_path = Path(__file__).parent.parent / "core" / "resource" / "levels.json"
+    levels_path = game_data("levels.json")
     if not levels_path.exists():
         return None
     try:
@@ -83,8 +85,8 @@ def main():
     parser.add_argument("--cols", type=int, default=None, help="地图列数（默认从 levels.json 读取）")
     parser.add_argument("--row", type=int, required=True, help="干员所在格子行")
     parser.add_argument("--col", type=int, required=True, help="干员所在格子列")
-    parser.add_argument("--active", type=str, required=True, help="弹药 logo 模板路径（相对 core/resource 或绝对路径）")
-    parser.add_argument("--inactive", type=str, required=True, help="非技能 logo 模板路径（相对 core/resource 或绝对路径）")
+    parser.add_argument("--active", type=str, required=True, help="弹药 logo 模板路径（相对 resource/gui_template 或绝对路径）")
+    parser.add_argument("--inactive", type=str, required=True, help="非技能 logo 模板路径（相对 resource/gui_template 或绝对路径）")
     parser.add_argument("--roi-offset-x", type=int, default=-35)
     parser.add_argument("--roi-offset-y", type=int, default=-240)
     parser.add_argument("--roi-w", type=int, default=75)
@@ -156,7 +158,7 @@ def main():
     resnet_matcher = None
     resnet_template_features = None
     if args.mini_cnn:
-        mini_cnn_path = Path(__file__).parent.parent / "core" / "resource" / "models" / "logo_mini_cnn.onnx"
+        mini_cnn_path = gui_template("logo_mini_cnn.onnx")
         if not mini_cnn_path.exists():
             raise FileNotFoundError(f"找不到 mini CNN 模型: {mini_cnn_path}")
         mini_cnn_matcher = LogoMiniCNNMatcher(mini_cnn_path)

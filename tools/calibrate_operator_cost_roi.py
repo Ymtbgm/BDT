@@ -66,10 +66,12 @@ _COST_LOGO_DX = -10
 _AVATAR_CENTER_Y_RATIO = 1490 / 1600
 _AVATAR_SIZE_RATIO = 120 / 1600
 
+from core.paths import game_template
+
 # 模板匹配阈值（默认 0.8；若误检多则继续调高）
 _TEMPLATE_MATCH_THRESHOLD = 0.78
 
-OPERATOR_COST_LOGO_PATH = ROOT / "core" / "resource" / "operator_cost.png"
+OPERATOR_COST_LOGO_PATH = game_template("operator_cost.png")
 
 # logo 预处理：只保留纯白 (>240) 和纯黑 (<10)，中间色调置为中性灰，
 # 避免 UI 背景/渐变干扰模板匹配。

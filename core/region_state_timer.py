@@ -14,6 +14,7 @@ from core.cost_bar_start import CostBarStartDetector
 from core.cost_bar_sync import CostBarSync
 from core.cost_bar_sync_cc import CostBarSyncCC
 import core.constants as constants
+from core.paths import GAME_TEMPLATE_DIR, game_template
 
 
 class _TimerResolutionManager:
@@ -262,7 +263,7 @@ class RegionStateTimer:
         self._rate_matcher: Optional[_RateTemplateMatcher] = None
         self._last_stable_rate_state: Optional[str] = None
         if use_template_matching:
-            tmpl_dir = Path(rate_template_dir) if rate_template_dir else Path(__file__).parent / "resource"
+            tmpl_dir = Path(rate_template_dir) if rate_template_dir else GAME_TEMPLATE_DIR
             self._rate_matcher = _RateTemplateMatcher(
                 str(tmpl_dir / constants.RATE_TEMPLATE_FAST_NAME),
                 str(tmpl_dir / constants.RATE_TEMPLATE_SLOW_NAME),
@@ -302,7 +303,7 @@ class RegionStateTimer:
         # 加载费用条 MAX 模板，满费后停止修正
         self._cost_max_template: Optional[np.ndarray] = None
         self._cost_max_mask: Optional[np.ndarray] = None
-        cost_max_path = Path(__file__).parent / "resource" / constants.COST_MAX_TEMPLATE_NAME
+        cost_max_path = game_template(constants.COST_MAX_TEMPLATE_NAME)
         self._cost_max_template, self._cost_max_mask = self._load_template_with_mask(str(cost_max_path))
         if self._cost_max_template is None and self.debug:
             print(f"[区域计时] 无法加载费用条 MAX 模板: {cost_max_path}")

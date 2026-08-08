@@ -6,6 +6,7 @@
 """
 
 import os
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -14,9 +15,8 @@ import cv2
 import numpy as np
 
 from core.logging_utils import log_error, log_info
+from core.paths import model
 
-
-ROOT = Path(__file__).resolve().parent.parent
 
 # 与 YOLO 检测模型部署指南保持一致
 SLICE_W = 640
@@ -39,7 +39,7 @@ class QuantityBadgeDetector:
     ):
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
-        self._model_path = Path(model_path) if model_path else ROOT / "YOLO" / "YOLO26_quantity.pt"
+        self._model_path = Path(model_path) if model_path else model("YOLO", "YOLO26_quantity.pt")
         self._model = None
         self.available = False
         self._last_error: Optional[str] = None

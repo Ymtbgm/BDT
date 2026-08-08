@@ -38,7 +38,6 @@ import cv2
 import numpy as np
 import keyboard
 import pydirectinput
-from pathlib import Path
 
 from core.capture import WindowCapture
 from core.ocr_engine import OCREngine
@@ -51,6 +50,7 @@ from core.cost_bar_sync import CostBarSync
 from core.cost_bar_sync_cc import CostBarSyncCC
 from core.cost_bar_calibration import list_calibrations
 from core.logging_utils import set_verbose
+from core.paths import game_template, PROJECT_ROOT
 from models.script_schema import ScriptModel
 import action
 
@@ -108,10 +108,10 @@ class Runner:
         self.selector = StageSelector(self.capture, self.ocr, debug=debug, max_side=9999)
 
         # 资源路径兼容开发环境与 PyInstaller 打包环境
-        _root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+        _root = PROJECT_ROOT
 
         # 初始化漏怪重试处理器
-        template_path = str(_root / "core" / "resource" / "loss.png")
+        template_path = str(game_template("loss.png"))
         self.retry_handler = StageRetryHandler(
             self.capture, self.selector, template_path=template_path, debug=self.debug
         )
@@ -123,7 +123,7 @@ class Runner:
             print(f"[警告] 无法加载 COST 模板: {cost_path}")
 
         # 加载行动结束模板用于无限凸图结算检测
-        retry_path = _root / "core" / "resource" / "retry.png"
+        retry_path = game_template("retry.png")
         self.retry_template = cv2.imdecode(np.fromfile(str(retry_path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         if self.retry_template is None:
             print(f"[警告] 无法加载 retry 模板: {retry_path}")

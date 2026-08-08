@@ -40,12 +40,14 @@ def benchmark_session(session, input_name, size, iters=300):
     return sum(times) / len(times)
 
 
+from core.paths import model
+
 if __name__ == "__main__":
     base = Path(__file__).parent.parent
     models = [
         ("ResNet_test full", base / "ResNet_test" / "resnet18_112x112.onnx"),
-        ("our full temp", base / "core" / "resource" / "models" / "resnet18_112_full_temp.onnx"),
-        ("our trimmed", base / "core" / "resource" / "models" / "resnet18_avatar_matcher_112.onnx"),
+        ("our full temp", model("ResNet", "resnet18_112_full_temp.onnx")),
+        ("our trimmed", model("ResNet", "resnet18_avatar_matcher_112.onnx")),
     ]
     threads_options = [None, 4, 8]
     for threads in threads_options:

@@ -1,6 +1,7 @@
 import os
 import shutil
 
+from core.paths import game_data
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QFileDialog,
     QGroupBox,
@@ -23,7 +24,7 @@ class ResourceTab(QWidget):
         levels_group = QGroupBox("levels.json 资源更新")
         levels_layout = QVBoxLayout(levels_group)
         levels_layout.addWidget(
-            QLabel("选择新的 levels.json 文件，点击更新后将会覆盖 core/resource/levels.json")
+            QLabel("选择新的 levels.json 文件，点击更新后将会覆盖 resource/game_data/levels.json")
         )
 
         file_layout = QHBoxLayout()
@@ -55,7 +56,7 @@ class ResourceTab(QWidget):
         if not src:
             QMessageBox.warning(self.main_window, "警告", "请先选择 levels.json 文件")
             return
-        dst = os.path.join(self._project_root(), "core", "resource", "levels.json")
+        dst = str(game_data("levels.json"))
         try:
             shutil.copy2(src, dst)
             self.main_window.resource_status.setText(f"状态: 更新成功 -> {dst}")

@@ -4,10 +4,15 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metada
 datas = []
 binaries = []
 import os
+# 打包时必须从 arknights_auto 目录执行 pyinstaller（或 build.bat），
+# 因此项目根目录直接使用当前工作目录。
 _project_root = os.getcwd()
+# 如果从外层目录执行，尝试用 spec 文件所在目录兜底
+if not os.path.exists(os.path.join(_project_root, 'entry.py')):
+    _project_root = os.path.dirname(os.path.abspath(SPECPATH))
 
-# 将 core/resource 下的静态资源（模板图、图标、levels.json 等）打包进输出目录
-_resource_dir = os.path.join(_project_root, 'core', 'resource')
+# 将 resource/ 下的静态资源（模板图、图标、levels.json、模型配置等）打包进输出目录
+_resource_dir = os.path.join(_project_root, 'resource')
 if os.path.isdir(_resource_dir):
     for _root, _dirs, _files in os.walk(_resource_dir):
         for _f in _files:
@@ -26,7 +31,7 @@ hiddenimports += [
     'core.cost_bar_sync', 'core.cost_bar_sync_cc', 'core.region_state_timer',
     'core.summon_registry', 'core.avatar_matcher', 'core.tile_pos',
     'core.cost_recognition', 'core.resolver', 'core.digit_recognizer',
-    'core.onnx_utils', 'core.logging_utils', 'core.yolo_detector',
+    'core.onnx_utils', 'core.logging_utils', 'core.yolo_detector', 'core.paths',
     'models', 'models.script_schema', 'models.raw_recording',
     'action',
 ]
@@ -142,7 +147,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
-    icon=os.path.join(_project_root, 'core', 'resource', 'Icon.ico'),
+    icon=os.path.join(_project_root, 'resource', 'gui_template', 'Icon.ico'),
 )
 coll = COLLECT(
     exe,
@@ -154,4 +159,26 @@ coll = COLLECT(
     name='ArknightsAuto',
 )
 
+# 将用户可替换的资源/脚本从 _internal 复制到 exe 同级目录，
+# 使打包后的路径结构与开发环境一致，避免运行时找不到资源闪退。
+_dist_dir = os.path.join(_project_root, 'dist', 'ArknightsAuto')
+if 'DISTPATH' in globals():
+    _dist_dir = os.path.join(DISTPATH, 'ArknightsAuto')
+elif 'distpath' in globals():
+    _dist_dir = os.path.join(distpath, 'ArknightsAuto')
 
+import shutil
+_resource_src = os.path.join(_dist_dir, '_internal', 'resource')
+_resource_dst = os.path.join(_dist_dir, 'resource')
+if os.path.isdir(_resource_src):
+    shutil.copytree(_resource_src, _resource_dst, dirs_exist_ok=True)
+
+_scripts_src = os.path.join(_project_root, 'scripts')
+_scripts_dst = os.path.join(_dist_dir, 'scripts')
+if os.path.isdir(_scripts_src):
+    shutil.copytree(_scripts_src, _scripts_dst, dirs_exist_ok=True)
+
+_example_src = os.path.join(_project_root, 'example_script.json')
+_example_dst = os.path.join(_dist_dir, 'example_script.json')
+if os.path.isfile(_example_src):
+    shutil.copy2(_example_src, _example_dst)

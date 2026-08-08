@@ -13,7 +13,7 @@ import action
 import cv2
 import numpy as np
 
-
+from core.paths import gui_template
 def _prepare_bg_pixmap(pixmap: QPixmap, opacity: float = 0.35) -> QPixmap:
     """对背景图降低不透明度，产生透明感，保留透明通道。"""
     if pixmap.isNull():
@@ -151,7 +151,7 @@ class ExecTab(QWidget):
         keys_layout.addWidget(QLabel("暂停键"))
         self.main_window.combo_pause_key = QComboBox()
         self.main_window.combo_pause_key.setEditable(True)
-        self.main_window.combo_pause_key.addItems(["p", "space", "q", "e", "r", "f"])
+        self.main_window.combo_pause_key.addItems(["space", "p", "q", "e", "r", "f"])
         self.main_window.combo_pause_key.setFixedWidth(80)
         keys_layout.addWidget(self.main_window.combo_pause_key)
 
@@ -211,7 +211,7 @@ class ExecTab(QWidget):
         layout.addWidget(self.main_window.status_label)
 
         # 日志
-        contract_path = os.path.join(self.main_window._project_root(), "core", "resource", "Contract.png")
+        contract_path = str(gui_template("Contract.png"))
         self._log_container = ContractLogContainer(contract_path, self)
         self.main_window.log_text = self._log_container.text_edit
         layout.addWidget(self._log_container)

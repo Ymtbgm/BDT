@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.capture import WindowCapture
 from core.region_state_timer import RegionStateTimer
+from core.paths import GAME_TEMPLATE_DIR
 
 
 def _load_template(path: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
@@ -230,7 +231,7 @@ def main():
     cap = WindowCapture(backend="mss")
     roi = RegionStateTimer.DEFAULT_ROI_B
 
-    tmpl_root = ROOT / "core" / "resource"
+    tmpl_root = GAME_TEMPLATE_DIR
     tmpl_fast, mask_fast = _load_template(str(tmpl_root / "1X.png"))
     tmpl_slow, mask_slow = _load_template(str(tmpl_root / "0.2X.png"))
     tmpl_fast2x, mask_fast2x = _load_template(str(tmpl_root / "2X.png"))

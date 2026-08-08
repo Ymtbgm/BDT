@@ -7,6 +7,7 @@ import numpy as np
 
 from core.logging_utils import log_error, log_info
 from core.onnx_utils import create_session_options, get_onnx_providers
+from core.paths import model
 
 
 class AvatarMatcherBase(ABC):
@@ -340,7 +341,7 @@ class ResNetAvatarMatcher(AvatarMatcherBase):
 
 
 def _default_onnx_path(input_size: int) -> Path:
-    return Path(__file__).parent / "resource" / "models" / f"resnet18_avatar_matcher_{input_size}.onnx"
+    return model("ResNet", f"resnet18_avatar_matcher_{input_size}.onnx")
 
 
 def _trim_resnet18_fc(onnx_path: Path) -> Path:
@@ -397,9 +398,7 @@ def ensure_mobilenetv4_onnx(
 
     此函数仅在开发/导出阶段使用，打包给用户时只分发 .onnx 文件即可，不需要 timm。
     """
-    output_path = output_path or (
-        Path(__file__).parent / "resource" / "models" / f"{model_name}_avatar_matcher_{input_size}.onnx"
-    )
+    output_path = output_path or model("MoblienetV4", f"{model_name}_avatar_matcher_{input_size}.onnx")
     output_path = Path(output_path)
     if output_path.exists():
         return output_path
