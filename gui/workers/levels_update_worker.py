@@ -42,7 +42,7 @@ class LevelsUpdateWorker(QThread):
         }
         self.check_finished.emit(True, info_dict)
 
-        if not self._auto_download:
+        if not self._auto_download and self._updater.target_path.exists():
             return
 
         try:

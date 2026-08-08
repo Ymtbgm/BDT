@@ -164,6 +164,14 @@ class ResourceTab(QWidget):
         self.main_window.label_levels_update_status.setText(
             f"发现新版本 (size: {size}, updated_at: {updated_at})"
         )
+        if silent:
+            size_mb = size / 1024 / 1024
+            Toast.show_message(
+                self.main_window,
+                f"发现新版本，开始下载 levels.json（约 {size_mb:.1f} MB）",
+                Toast.Type.INFO,
+                duration_ms=3000,
+            )
 
     def _on_download_progress(self, current: int, total: int):
         if total > 0:
