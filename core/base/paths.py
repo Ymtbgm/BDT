@@ -8,7 +8,7 @@ def get_project_root() -> Path:
     """返回项目根目录。PyInstaller 打包后返回 exe 所在目录。"""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 PROJECT_ROOT = get_project_root()

@@ -51,6 +51,7 @@ class LevelsUpdater:
     ):
         self.metadata_url = metadata_url or self.DEFAULT_METADATA_URL
         self.target_path = target_path if target_path is not None else game_data("levels.json")
+        self.target_path.parent.mkdir(parents=True, exist_ok=True)
         self._session = requests.Session()
         self._session.headers.update({
             "Accept": "application/json",
