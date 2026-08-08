@@ -1,7 +1,7 @@
 """右下角自动消失提示（Toast）。"""
 
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QRect
-from PyQt6.QtGui import QFont, QColor, QPainter, QPainterPath
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QApplication, QGraphicsOpacityEffect, QSizePolicy
 
 
@@ -20,27 +20,11 @@ class Toast(QWidget):
 
     DEFAULT_DURATION_MS = 5000
 
-    _TYPE_STYLES = {
-        Type.INFO: {
-            "bg": "rgba(50, 54, 60, 245)",
-            "border": "rgba(100, 149, 237, 230)",
-            "indicator": "#6495ED",
-        },
-        Type.SUCCESS: {
-            "bg": "rgba(40, 54, 45, 245)",
-            "border": "rgba(80, 200, 120, 230)",
-            "indicator": "#50C878",
-        },
-        Type.WARNING: {
-            "bg": "rgba(60, 55, 40, 245)",
-            "border": "rgba(255, 193, 7, 230)",
-            "indicator": "#FFC107",
-        },
-        Type.ERROR: {
-            "bg": "rgba(60, 40, 40, 245)",
-            "border": "rgba(255, 107, 107, 230)",
-            "indicator": "#FF6B6B",
-        },
+    _TYPE_COLORS = {
+        Type.INFO: "#6495ED",
+        Type.SUCCESS: "#50C878",
+        Type.WARNING: "#FFC107",
+        Type.ERROR: "#FF6B6B",
     }
 
     def __init__(
@@ -68,20 +52,20 @@ class Toast(QWidget):
         self._position_on_screen()
 
     def _setup_ui(self, message: str):
-        styles = self._TYPE_STYLES.get(self._toast_type, self._TYPE_STYLES[self.Type.INFO])
+        dot_color = self._TYPE_COLORS.get(self._toast_type, self._TYPE_COLORS[self.Type.INFO])
 
-        self.setStyleSheet(f"""
-            QWidget#ToastContainer {{
-                background-color: {styles['bg']};
-                border: 1px solid {styles['border']};
+        self.setStyleSheet("""
+            QWidget#ToastContainer {
+                background-color: #FFFFFF;
+                border: 1px solid #E0E0E0;
                 border-radius: 10px;
-            }}
-            QLabel {{
-                color: #F0F0F0;
+            }
+            QLabel#ToastMessage {
+                color: #333333;
                 font-size: 13px;
                 background: transparent;
                 border: none;
-            }}
+            }
         """)
 
         container = QWidget(self)
@@ -89,15 +73,19 @@ class Toast(QWidget):
 
         layout = QHBoxLayout(container)
         layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        # 左侧色块指示器
-        indicator = QWidget(container)
-        indicator.setFixedSize(4, 20)
-        indicator.setStyleSheet(f"background-color: {styles['indicator']}; border-radius: 2px;")
-        layout.addWidget(indicator)
+        # 彩色圆点指示器
+        dot = QLabel()
+        dot.setFixedSize(10, 10)
+        dot.setStyleSheet(f"""
+            background-color: {dot_color};
+            border-radius: 5px;
+        """)
+        layout.addWidget(dot)
 
         self._label = QLabel(message)
+        self._label.setObjectName("ToastMessage")
         self._label.setFont(QFont("Microsoft YaHei", 10))
         self._label.setWordWrap(True)
         self._label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
