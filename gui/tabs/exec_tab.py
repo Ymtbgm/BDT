@@ -79,6 +79,8 @@ class ExecTab(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
+        self._init_error_shown = False
+        self._last_lines: list[str] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -430,6 +432,8 @@ class ExecTab(QWidget):
             return
 
         self.main_window._save_config()
+        self._init_error_shown = False
+        self._last_lines.clear()
 
         args = ["--run-script", script_path]
         if self.main_window.chk_loop.isChecked():
@@ -473,6 +477,7 @@ class ExecTab(QWidget):
         self.main_window.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.main_window.process.readyReadStandardOutput.connect(self._on_stdout)
         self.main_window.process.finished.connect(self._on_finished)
+        self.main_window.process.errorOccurred.connect(self._on_process_error)
 
         self.main_window.log_text.clear()
         if self.main_window.chk_direct_start.isChecked():
@@ -496,6 +501,13 @@ class ExecTab(QWidget):
         for line in lines:
             stripped = line.strip()
             if not stripped:
+                continue
+            self._last_lines.append(stripped)
+            if len(self._last_lines) > 200:
+                self._last_lines.pop(0)
+            if stripped.startswith("__INIT_ERROR__:"):
+                error_msg = stripped.split(":", 1)[1].strip()
+                self._show_init_error(error_msg)
                 continue
             if "[系统] 脚本开始运行" in stripped:
                 self.main_window.status_label.setText("状态: 运行中")
@@ -524,10 +536,37 @@ class ExecTab(QWidget):
         if filtered:
             self.main_window.log_text.append("\n".join(filtered))
 
+    def _show_init_error(self, error_msg: str):
+        """子进程初始化失败时弹窗提示，避免打包后无控制台看不到报错。"""
+        if self._init_error_shown:
+            return
+        self._init_error_shown = True
+        detail = "\n".join(self._last_lines[-30:])
+        QMessageBox.critical(
+            self.main_window,
+            "脚本初始化失败",
+            f"后端进程初始化时出错，模型或资源可能未正确加载：\n\n{error_msg}\n\n"
+            f"最近日志（已同步到下方输出框）：\n{detail}",
+        )
+
     def _on_stderr(self):
         data = self.main_window.process.readAllStandardError().data().decode("utf-8", errors="replace")
         if data.strip():
             self.main_window.log_text.append(f"[stderr] {data.strip()}")
+
+    def _on_process_error(self, error):
+        """QProcess 自身启动失败时弹窗提示（如 exe 缺失、权限不足等）。"""
+        error_text = self.main_window.process.errorString()
+        QMessageBox.critical(
+            self.main_window,
+            "无法启动脚本进程",
+            f"启动后端进程失败：\n{error_text}\n\n"
+            f"错误码：{error}\n\n"
+            f"请检查打包文件是否完整，或尝试重新打包。",
+        )
+        self.main_window.status_label.setText(f"状态: 启动失败 ({error_text})")
+        self.main_window.btn_run.setEnabled(True)
+        self.main_window.btn_stop.setEnabled(False)
 
     def _on_finished(self, exit_code, exit_status):
         self.main_window.status_label.setText(f"状态: 已停止 (退出码 {exit_code})")
@@ -536,6 +575,18 @@ class ExecTab(QWidget):
         action.start_matchstick_listener()
         if self.main_window._region_timer is not None and self.main_window._region_timer.is_running():
             self.main_window._region_timer.reconnect_hotkey()
+
+        if exit_code != 0 and not self._init_error_shown:
+            detail = "\n".join(self._last_lines[-30:])
+            QMessageBox.critical(
+                self.main_window,
+                "脚本异常退出",
+                f"后端进程异常退出（退出码 {exit_code}）。\n\n"
+                f"最近日志：\n{detail}\n\n"
+                f"请检查下方输出框中的完整报错信息。",
+            )
+        self._init_error_shown = False
+        self._last_lines.clear()
 
     def _stop_script(self):
         if self.main_window.process and self.main_window.process.state() != QProcess.ProcessState.NotRunning:

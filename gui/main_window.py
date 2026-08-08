@@ -398,7 +398,7 @@ class MainWindow(QMainWindow):
         module_idx = max(0, min(2, config.get("support_module", 1) - 1))
         self.combo_support_module.setCurrentIndex(module_idx)
 
-        pause_key = self._normalize_key_name(config.get("pause_key", "p"))
+        pause_key = self._normalize_key_name(config.get("pause_key", "space"))
         idx = self.combo_pause_key.findText(pause_key)
         if idx >= 0:
             self.combo_pause_key.setCurrentIndex(idx)
@@ -411,7 +411,7 @@ class MainWindow(QMainWindow):
 
         # 同步游戏内快捷键到 action 模块（GUI 进程也运行划火柴监听，需要一致）
         action.configure_keys(
-            pause=self._normalize_key_name(config.get("pause_key", "p")),
+            pause=self._normalize_key_name(config.get("pause_key", "space")),
             skill=self._normalize_key_name(config.get("skill_key", "e")),
             retreat=self._normalize_key_name(config.get("retreat_key", "q")),
             speed=self._normalize_key_name(config.get("speed_key", "f")),
@@ -435,7 +435,7 @@ class MainWindow(QMainWindow):
             ("pass_50ms", self.line_matchstick_50, self.chk_matchstick_50),
         ):
             op_cfg = matchstick.get(op, {})
-            widget_key.setText(self._normalize_hotkey(op_cfg.get("hotkey", {"select_operator": "r", "pass_166ms": "space", "pass_50ms": "f"}[op])))
+            widget_key.setText(self._normalize_hotkey(op_cfg.get("hotkey", {"select_operator": "r", "pass_166ms": "p", "pass_50ms": "f"}[op])))
             widget_chk.setChecked(op_cfg.get("enabled", False))
 
         self.exec_tab._on_loop_changed(self.chk_loop.checkState())

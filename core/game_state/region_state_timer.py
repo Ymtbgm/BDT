@@ -203,7 +203,7 @@ class RegionStateTimer:
     def __init__(
         self,
         capture: WindowCapture,
-        pause_key: str = "p",
+        pause_key: str = "space",
         roi_b: Optional[Tuple[int, int, int, int]] = None,
         threshold: int = constants.REGION_WHITE_THRESHOLD,
         b_fast_threshold: int = constants.REGION_B_FAST_THRESHOLD,

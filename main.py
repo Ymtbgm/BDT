@@ -72,64 +72,69 @@ class Runner:
         self.avg_capture_ms = 0.0
         self._setup_hotkeys()
 
-        self.capture = WindowCapture(backend="mss")
+        try:
+            self.capture = WindowCapture(backend="mss")
 
-        # engine: None 表示自动选择（优先 PaddleX ONNX Runtime，回退 PaddleOCR）
-        # model_size: "mobile" 模型体积小、速度快；"server" 精度高但慢
-        t0 = time.perf_counter()
-        self.ocr = OCREngine(
-            use_gpu=False,
-            debug=debug,
-            engine=ocr_engine,
-            model_size="mobile",
-        )
-        t1 = time.perf_counter()
-        if self.debug:
-            print(f"[DEBUG] OCREngine 初始化总耗时: {(t1 - t0) * 1000:.1f}ms")
-
-        self.executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug)
-        if cost_tag:
-            print(f"[费用条同步] 使用危机合约校准模式: {cost_tag}")
-            self.cost_sync = CostBarSyncCC(self.capture, calibration_name=cost_tag, debug=self.debug)
-        else:
-            print("[费用条同步] 使用普通模式校准表（前 10s 区分 29 帧）")
-            self.cost_sync = CostBarSyncCC(
-                self.capture,
-                calibration_name="normal",
-                calibration_schedule=[
-                    (0.0, "normal_early"),
-                    (10000.0, "normal"),
-                ],
-                debug=self.debug,
+            # engine: None 表示自动选择（优先 PaddleX ONNX Runtime，回退 PaddleOCR）
+            # model_size: "mobile" 模型体积小、速度快；"server" 精度高但慢
+            t0 = time.perf_counter()
+            self.ocr = OCREngine(
+                use_gpu=False,
+                debug=debug,
+                engine=ocr_engine,
+                model_size="mobile",
             )
-        self.executor.set_cost_sync(self.cost_sync)
-        self.leak = LeakDetector(self.capture)
-        # max_side: 9999 表示不缩放，使用原图分辨率以获得最佳识别精度
-        self.selector = StageSelector(self.capture, self.ocr, debug=debug, max_side=9999)
+            t1 = time.perf_counter()
+            if self.debug:
+                print(f"[DEBUG] OCREngine 初始化总耗时: {(t1 - t0) * 1000:.1f}ms")
 
-        # 资源路径兼容开发环境与 PyInstaller 打包环境
-        _root = PROJECT_ROOT
+            self.executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug)
+            if cost_tag:
+                print(f"[费用条同步] 使用危机合约校准模式: {cost_tag}")
+                self.cost_sync = CostBarSyncCC(self.capture, calibration_name=cost_tag, debug=self.debug)
+            else:
+                print("[费用条同步] 使用普通模式校准表（前 10s 区分 29 帧）")
+                self.cost_sync = CostBarSyncCC(
+                    self.capture,
+                    calibration_name="normal",
+                    calibration_schedule=[
+                        (0.0, "normal_early"),
+                        (10000.0, "normal"),
+                    ],
+                    debug=self.debug,
+                )
+            self.executor.set_cost_sync(self.cost_sync)
+            self.leak = LeakDetector(self.capture)
+            # max_side: 9999 表示不缩放，使用原图分辨率以获得最佳识别精度
+            self.selector = StageSelector(self.capture, self.ocr, debug=debug, max_side=9999)
 
-        # 初始化漏怪重试处理器
-        template_path = str(game_template("loss.png"))
-        self.retry_handler = StageRetryHandler(
-            self.capture, self.selector, template_path=template_path, debug=self.debug
-        )
+            # 资源路径兼容开发环境与 PyInstaller 打包环境
+            _root = PROJECT_ROOT
 
-        # 加载 COST 模板用于计时校准
-        cost_path = CostBarStartDetector.default_template_path(_root)
-        self.cost_template = CostBarStartDetector.load_template(str(cost_path))
-        if self.cost_template is None:
-            print(f"[警告] 无法加载 COST 模板: {cost_path}")
+            # 初始化漏怪重试处理器
+            template_path = str(game_template("loss.png"))
+            self.retry_handler = StageRetryHandler(
+                self.capture, self.selector, template_path=template_path, debug=self.debug
+            )
 
-        # 加载行动结束模板用于无限凸图结算检测
-        retry_path = game_template("retry.png")
-        self.retry_template = cv2.imdecode(np.fromfile(str(retry_path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-        if self.retry_template is None:
-            print(f"[警告] 无法加载 retry 模板: {retry_path}")
-        else:
-            if self.retry_template.ndim == 3 and self.retry_template.shape[2] == 3:
-                self.retry_template = cv2.cvtColor(self.retry_template, cv2.COLOR_BGR2BGRA)
+            # 加载 COST 模板用于计时校准
+            cost_path = CostBarStartDetector.default_template_path(_root)
+            self.cost_template = CostBarStartDetector.load_template(str(cost_path))
+            if self.cost_template is None:
+                print(f"[警告] 无法加载 COST 模板: {cost_path}")
+
+            # 加载行动结束模板用于无限凸图结算检测
+            retry_path = game_template("retry.png")
+            self.retry_template = cv2.imdecode(np.fromfile(str(retry_path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+            if self.retry_template is None:
+                print(f"[警告] 无法加载 retry 模板: {retry_path}")
+            else:
+                if self.retry_template.ndim == 3 and self.retry_template.shape[2] == 3:
+                    self.retry_template = cv2.cvtColor(self.retry_template, cv2.COLOR_BGR2BGRA)
+        except Exception as e:
+            # GUI 进程通过 QProcess 捕获该标记并弹窗提示，方便打包后无控制台时排查
+            print(f"__INIT_ERROR__: {type(e).__name__}: {e}")
+            raise
 
     async def _benchmark_capture_delay(self, samples: int = 5):
         """启动时 benchmark 截图延迟，用于动态修正帧补偿。"""
@@ -542,7 +547,7 @@ async def main():
     ocr_engine_choice = _arg_str("--ocr-engine", "auto")
     ocr_engine = None if ocr_engine_choice == "auto" else ocr_engine_choice
 
-    pause_key = _arg_str("--pause-key", "p")
+    pause_key = _arg_str("--pause-key", "space")
     skill_key = _arg_str("--skill-key", "e")
     retreat_key = _arg_str("--retreat-key", "q")
     speed_key = _arg_str("--speed-key", "f")

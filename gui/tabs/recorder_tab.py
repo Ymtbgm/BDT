@@ -370,7 +370,7 @@ class RecorderTab(QWidget):
                         print("[recorder_tab poll] set_phase 开始录制，F10停止录制")
                     overlay.set_phase("开始录制，F10停止录制")
                     self._normal_overlay_started = True
-                    self._recording_overlay_switch_at = time.time() + 5
+                    self._recording_overlay_switch_at = time.time() + 3
                 elif time.time() >= self._recording_overlay_switch_at:
                     if debug:
                         print("[recorder_tab poll] switch to timer")
@@ -386,39 +386,47 @@ class RecorderTab(QWidget):
 
     def _switch_recorder_overlay_to_timer(self):
         """录制提示 5 秒后切换为计时显示。"""
+        debug = "recorder" in set(self.main_window.combo_rec_debug.checked_data())
         overlay = getattr(self.main_window, "_recorder_overlay", None)
-        print(f"[_switch_recorder_overlay_to_timer] overlay={overlay}")
+        if debug:
+            print(f"[_switch_recorder_overlay_to_timer] overlay={overlay}")
         if overlay is None:
             return
         self._recorder_overlay_timer_mode = True
         timer = self.main_window._region_timer
         if timer is None and self.main_window._recorder is not None:
             timer = self.main_window._recorder.timer
-        print(f"[_switch_recorder_overlay_to_timer] timer={timer} started={timer.is_started() if timer else None}")
+        if debug:
+            print(f"[_switch_recorder_overlay_to_timer] timer={timer} started={timer.is_started() if timer else None}")
         if timer is not None and timer.is_started():
             elapsed = timer.get_elapsed_ms()
             s, f = self.main_window._ms_to_sf_for_timer(elapsed)
-            print(f"[_switch_recorder_overlay_to_timer] elapsed={elapsed:.1f} s={s} f={f}")
+            if debug:
+                print(f"[_switch_recorder_overlay_to_timer] elapsed={elapsed:.1f} s={s} f={f}")
             overlay.set_time(
                 s, f, elapsed,
                 getattr(timer, "_rate", 1.0),
                 timer.is_manual_paused(),
             )
         else:
-            print("[_switch_recorder_overlay_to_timer] timer not started, show 0")
+            if debug:
+                print("[_switch_recorder_overlay_to_timer] timer not started, show 0")
             overlay.set_time(0, 0)
 
     def _update_recorder_overlay_time(self, overlay):
         """刷新录制浮窗的计时显示。"""
+        debug = "recorder" in set(self.main_window.combo_rec_debug.checked_data())
         timer = self.main_window._region_timer
         if timer is None and self.main_window._recorder is not None:
             timer = self.main_window._recorder.timer
         if timer is None:
-            print("[_update_recorder_overlay_time] timer is None")
+            if debug:
+                print("[_update_recorder_overlay_time] timer is None")
             return
         elapsed = timer.get_elapsed_ms()
         s, f = self.main_window._ms_to_sf_for_timer(elapsed)
-        print(f"[_update_recorder_overlay_time] elapsed={elapsed:.1f} s={s} f={f}")
+        if debug:
+            print(f"[_update_recorder_overlay_time] elapsed={elapsed:.1f} s={s} f={f}")
         overlay.set_time(
             s, f, elapsed,
             getattr(timer, "_rate", 1.0),

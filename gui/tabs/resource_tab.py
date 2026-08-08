@@ -167,7 +167,7 @@ class ResourceTab(QWidget):
         if silent:
             Toast.show_message(
                 self.main_window,
-                "发现新版本，开始下载 levels.json",
+                "发现新版本，开始下载关卡数据",
                 Toast.Type.INFO,
                 duration_ms=3000,
             )
@@ -187,7 +187,7 @@ class ResourceTab(QWidget):
             if silent:
                 Toast.show_message(
                     self.main_window,
-                    "levels.json 更新完成",
+                    "关卡数据更新完成",
                     Toast.Type.SUCCESS,
                 )
             else:
@@ -197,7 +197,7 @@ class ResourceTab(QWidget):
             if silent:
                 Toast.show_message(
                     self.main_window,
-                    f"levels.json 更新失败: {message}",
+                    f"关卡数据更新失败: {message}",
                     Toast.Type.ERROR,
                 )
             else:
@@ -208,7 +208,7 @@ class ResourceTab(QWidget):
         if silent:
             Toast.show_message(
                 self.main_window,
-                f"levels.json 检查失败: {message}",
+                f"关卡数据检查失败: {message}",
                 Toast.Type.ERROR,
             )
         else:

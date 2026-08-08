@@ -82,7 +82,7 @@ class ActionRecorder:
         initial_operator_count: int = 0,
         initial_item_count: int = 0,
         support_count: int = 0,
-        pause_key: str = "p",
+        pause_key: str = "space",
         matchstick_hotkeys: Optional[dict] = None,
         cost_bar_calibration_name: Optional[str] = None,
         ocr: Optional[OCREngine] = None,
@@ -338,14 +338,23 @@ class ActionRecorder:
         avatar_ratios = constants.SQUAD_AVATAR_ROI_RATIOS
         has_support = self.support_count > 0
 
+        # 构建需要截取的槽位索引：
+        # - 无助战时，按顺序取前 initial_operator_count 个普通槽位（跳过右上角助战位 12）
+        # - 有助战时，前 (initial_operator_count - support_count) 个为普通干员，
+        #   最后 support_count 个固定取右上角助战位 12 开始的槽位
+        if has_support:
+            regular_count = self.initial_operator_count - self.support_count
+            roi_indices = list(range(regular_count)) + list(
+                range(12, 12 + self.support_count)
+            )
+        else:
+            roi_indices = [
+                i for i in range(self.initial_operator_count) if i != 12
+            ]
+
         captured = 0
-        for roi_index in range(len(name_ratios)):
-            if not has_support and roi_index == 12:
-                # 不携带助战时，跳过第 13 个槽位（右上角助战位）
-                continue
-            if captured >= self.initial_operator_count:
-                break
-            if roi_index >= len(avatar_ratios):
+        for roi_index in roi_indices:
+            if roi_index >= len(name_ratios) or roi_index >= len(avatar_ratios):
                 break
 
             rx, ry, rw, rh = name_ratios[roi_index]
@@ -367,7 +376,7 @@ class ActionRecorder:
             name = best_name.strip() if best_name else ""
             if not name:
                 name = f"__squad_{captured}__"
-                self._log(f"编队槽位 {captured} 名称识别失败，使用占位符")
+                self._log(f"编队槽位 {captured} (ROI={roi_index}) 名称识别失败，使用占位符")
             self._squad_names.append(name)
 
             name_filename = f"squad_name_{captured:02d}.png"
@@ -403,7 +412,8 @@ class ActionRecorder:
                 bar_index=captured,
             )
 
-            self._log(f"编队槽位 {captured} (ROI={roi_index}): {name} (conf={best_conf:.2f})")
+            slot_label = "助战" if roi_index >= 12 else "普通"
+            self._log(f"编队槽位 {captured} (ROI={roi_index}, {slot_label}): {name} (conf={best_conf:.2f})")
             captured += 1
 
     def _preload_avatar_matcher(self):
@@ -786,6 +796,9 @@ class ActionRecorder:
 
     def _wait_for_timer_start(self):
         self._log("_wait_for_timer_start 开始")
+
+        # 等待主窗口完成最小化，避免截图捕捉到 GUI 自身
+        time.sleep(2.0)
 
         # 1. 先截取编队界面关键帧
         try:
