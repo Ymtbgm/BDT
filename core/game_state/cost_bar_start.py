@@ -5,10 +5,10 @@ from typing import Optional, Tuple, Union
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-from core.cost_bar_sync import CostBarSync
-from core.cost_bar_sync_cc import CostBarSyncCC
-from core.paths import game_template, PROJECT_ROOT
+from core.capture.capture import WindowCapture
+from core.game_state.cost_bar_sync import CostBarSync
+from core.game_state.cost_bar_sync_cc import CostBarSyncCC
+from core.base.paths import game_template, PROJECT_ROOT
 
 
 CostBarSyncType = Union[CostBarSync, CostBarSyncCC]

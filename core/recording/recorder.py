@@ -8,12 +8,12 @@ import numpy as np
 from pynput import mouse, keyboard
 
 import action
-import core.constants as constants
-from core.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
-from core.capture import WindowCapture
-from core.ocr_engine import OCREngine
-from core.region_state_timer import RegionStateTimer
-from core.tile_pos import TilePosCalculator, load_stage_dimensions
+import core.base.constants as constants
+from core.vision.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
+from core.capture.capture import WindowCapture
+from core.vision.ocr_engine import OCREngine
+from core.game_state.region_state_timer import RegionStateTimer
+from core.map.tile_pos import TilePosCalculator, load_stage_dimensions
 from models.raw_recording import RawRecording, RawAction, Keyframe, KeyframeType
 from models.script_schema import ScriptModel, ActionType
 
@@ -444,7 +444,7 @@ class ActionRecorder:
                 self._log(f"RawRecording 已保存: {raw_path}")
             except Exception as e:
                 self._log(f"保存 RawRecording 失败: {e}")
-        from core.resolver import OfflineResolver
+        from core.recording.resolver import OfflineResolver
         self._log(
             f"开始离线解析: avatar_model={self.avatar_model_name}, "
             f"actions={len(raw.actions)}, keyframes={len(raw.keyframes)}"

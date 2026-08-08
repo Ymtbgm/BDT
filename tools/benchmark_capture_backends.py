@@ -20,10 +20,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture, _WINDOWS_CAPTURE_AVAILABLE
-from core.region_state_timer import RegionStateTimer, _RateTemplateMatcher
-import core.constants as constants
-from core.paths import GAME_TEMPLATE_DIR
+from core.capture.capture import WindowCapture, _WINDOWS_CAPTURE_AVAILABLE
+from core.game_state.region_state_timer import RegionStateTimer, _RateTemplateMatcher
+import core.base.constants as constants
+from core.base.paths import GAME_TEMPLATE_DIR
 
 _active_cap: WindowCapture | None = None
 

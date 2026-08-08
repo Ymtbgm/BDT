@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.ocr_engine import OCREngine
+from core.vision.ocr_engine import OCREngine
 
 img_path = ROOT / "debug/recordings/1785429486181/ocr_debug/quantity_strip_0010_merged.png"
 img = cv2.imdecode(np.fromfile(str(img_path), dtype=np.uint8), cv2.IMREAD_COLOR)

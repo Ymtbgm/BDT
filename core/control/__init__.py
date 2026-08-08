@@ -1,0 +1,1 @@
+"""control subpackage for ArknightsAuto."""

@@ -10,7 +10,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
+from core.capture.capture import WindowCapture
 
 
 # 默认 ROI 比例与 main.py 中费用条检测区域一致（2560x1600 基准）

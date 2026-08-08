@@ -1,0 +1,1 @@
+"""capture subpackage for ArknightsAuto."""

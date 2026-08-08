@@ -5,8 +5,8 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 import pydirectinput
-from core.capture import WindowCapture
-from core.stage_selector import StageSelector
+from core.capture.capture import WindowCapture
+from core.control.stage_selector import StageSelector
 
 
 class StageRetryHandler:

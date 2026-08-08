@@ -2,7 +2,7 @@ import pydirectinput
 import time
 from pynput.keyboard import Listener
 
-import core.constants as constants
+import core.base.constants as constants
 
 # --- 核心设置 ---
 pydirectinput.PAUSE = 0

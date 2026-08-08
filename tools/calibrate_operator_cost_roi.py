@@ -45,7 +45,7 @@ import win32gui
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
+from core.capture.capture import WindowCapture
 
 # 标定工具需要比解析器更大的顶部边距，以便在 active_slot 选中、logo 上移时仍能框选。
 # core/resolver.py 中仍为 1370/1600 + 230/1600；标定输出使用窗口比例，不影响解析器使用。
@@ -66,7 +66,7 @@ _COST_LOGO_DX = -10
 _AVATAR_CENTER_Y_RATIO = 1490 / 1600
 _AVATAR_SIZE_RATIO = 120 / 1600
 
-from core.paths import game_template
+from core.base.paths import game_template
 
 # 模板匹配阈值（默认 0.8；若误检多则继续调高）
 _TEMPLATE_MATCH_THRESHOLD = 0.78

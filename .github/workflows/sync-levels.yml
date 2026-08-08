@@ -1,0 +1,102 @@
+name: Sync levels.json to Aliyun OSS
+
+on:
+  schedule:
+    # UTC 04:00, 10:00, 16:00, 22:00 -> 北京时间 12:00, 18:00, 00:00, 06:00
+    - cron: '0 4,10,16,22 * * *'
+  workflow_dispatch:
+
+env:
+  OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+  OSS_BUCKET: levelcunchu1
+  OSS_PREFIX: levels
+  UPSTREAM_URL: https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/levels.json
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install and configure ossutil
+        run: |
+          curl -fsSL -o ossutil64 https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil64
+          chmod +x ossutil64
+          ./ossutil64 config \
+            -i "${{ secrets.OSS_ACCESS_KEY_ID }}" \
+            -k "${{ secrets.OSS_ACCESS_KEY_SECRET }}" \
+            -e "$OSS_ENDPOINT" \
+            -c ~/.ossutilconfig
+
+      - name: Download upstream levels.json
+        run: |
+          curl -fsSL -o levels.json "$UPSTREAM_URL"
+
+      - name: Compute metadata
+        id: meta
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import hashlib
+          import json
+          import os
+
+          data = open('levels.json', 'rb').read()
+          sha256 = hashlib.sha256(data).hexdigest()
+          size = len(data)
+
+          metadata = {
+              'filename': 'levels.json',
+              'size': size,
+              'sha256': sha256,
+              'updated_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'source': 'https://github.com/yuanyan3060/ArknightsGameResource',
+              'url': f'https://{os.environ["OSS_BUCKET"]}.{os.environ["OSS_ENDPOINT"]}/{os.environ["OSS_PREFIX"]}/levels.json',
+              'metadata_url': f'https://{os.environ["OSS_BUCKET"]}.{os.environ["OSS_ENDPOINT"]}/{os.environ["OSS_PREFIX"]}/metadata.json',
+          }
+          with open('metadata.json', 'w', encoding='utf-8') as f:
+              json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'sha256={sha256}\n')
+              f.write(f'size={size}\n')
+          PY
+
+      - name: Fetch existing metadata from OSS
+        id: existing
+        run: |
+          ./ossutil64 cp "oss://${OSS_BUCKET}/${OSS_PREFIX}/metadata.json" existing_metadata.json -f || true
+          if [ -f existing_metadata.json ]; then
+            python3 - <<'PY'
+          import json, os
+          try:
+              old = json.load(open('existing_metadata.json', encoding='utf-8'))
+              sha = old.get('sha256', '')
+          except Exception:
+              sha = ''
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'old_sha256={sha}\n')
+          PY
+          else
+            echo 'old_sha256=' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload to OSS if changed
+        if: steps.existing.outputs.old_sha256 != steps.meta.outputs.sha256
+        run: |
+          ./ossutil64 cp levels.json "oss://${OSS_BUCKET}/${OSS_PREFIX}/levels.json" \
+            -f --acl public-read --meta Content-Type:application/json
+          ./ossutil64 cp metadata.json "oss://${OSS_BUCKET}/${OSS_PREFIX}/metadata.json" \
+            -f --acl public-read --meta Content-Type:application/json
+
+      - name: Summary
+        run: |
+          echo "Upstream: $UPSTREAM_URL"
+          echo "Local size: ${{ steps.meta.outputs.size }}"
+          echo "Local sha256: ${{ steps.meta.outputs.sha256 }}"
+          if [ "${{ steps.existing.outputs.old_sha256 }}" = "${{ steps.meta.outputs.sha256 }}" ]; then
+            echo "Status: unchanged, no upload performed."
+          else
+            echo "Status: updated, uploaded to oss://${OSS_BUCKET}/${OSS_PREFIX}/"
+          fi

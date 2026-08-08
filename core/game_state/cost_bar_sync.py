@@ -3,8 +3,8 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-import core.constants as constants
+from core.capture.capture import WindowCapture
+import core.base.constants as constants
 
 
 class CostBarSync:

@@ -4,8 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.resolver import OfflineResolver
-from core.logging_utils import set_verbose
+from core.recording.resolver import OfflineResolver
+from core.base.logging_utils import set_verbose
 from models.raw_recording import RawRecording
 
 session_dir = ROOT / "debug/recordings/1785429486181"

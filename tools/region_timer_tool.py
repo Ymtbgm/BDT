@@ -7,8 +7,8 @@ import keyboard
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
-from core.region_state_timer import RegionStateTimer
+from core.capture.capture import WindowCapture
+from core.game_state.region_state_timer import RegionStateTimer
 
 
 def main():

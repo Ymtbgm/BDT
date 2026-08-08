@@ -5,9 +5,9 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from core.logging_utils import log_error, log_info
-from core.onnx_utils import create_session_options, get_onnx_providers
-from core.paths import model
+from core.base.logging_utils import log_error, log_info
+from core.base.onnx_utils import create_session_options, get_onnx_providers
+from core.base.paths import model
 
 
 class AvatarMatcherBase(ABC):

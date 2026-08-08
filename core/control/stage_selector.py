@@ -1,8 +1,8 @@
 import time
 import asyncio
 from typing import List, Optional, Tuple
-from core.capture import WindowCapture
-from core.ocr_engine import OCREngine
+from core.capture.capture import WindowCapture
+from core.vision.ocr_engine import OCREngine
 
 
 class StageSelector:

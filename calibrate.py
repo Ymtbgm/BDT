@@ -2,8 +2,8 @@ import sys
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-from core.grid_mapper import GridMapper
+from core.capture.capture import WindowCapture
+from core.map.grid_mapper import GridMapper
 
 
 def draw_grid(frame: np.ndarray, mapper: GridMapper):

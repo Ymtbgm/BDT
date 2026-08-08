@@ -39,18 +39,18 @@ import numpy as np
 import keyboard
 import pydirectinput
 
-from core.capture import WindowCapture
-from core.ocr_engine import OCREngine
-from core.executor import ScriptExecutor
-from core.leak_detector import LeakDetector
-from core.stage_selector import StageSelector
-from core.retry_handler import StageRetryHandler
-from core.cost_bar_start import CostBarStartDetector
-from core.cost_bar_sync import CostBarSync
-from core.cost_bar_sync_cc import CostBarSyncCC
-from core.cost_bar_calibration import list_calibrations
-from core.logging_utils import set_verbose
-from core.paths import game_template, PROJECT_ROOT
+from core.capture.capture import WindowCapture
+from core.vision.ocr_engine import OCREngine
+from core.control.executor import ScriptExecutor
+from core.vision.leak_detector import LeakDetector
+from core.control.stage_selector import StageSelector
+from core.control.retry_handler import StageRetryHandler
+from core.game_state.cost_bar_start import CostBarStartDetector
+from core.game_state.cost_bar_sync import CostBarSync
+from core.game_state.cost_bar_sync_cc import CostBarSyncCC
+from core.game_state.cost_bar_calibration import list_calibrations
+from core.base.logging_utils import set_verbose
+from core.base.paths import game_template, PROJECT_ROOT
 from models.script_schema import ScriptModel
 import action
 

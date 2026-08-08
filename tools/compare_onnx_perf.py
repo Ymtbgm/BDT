@@ -40,7 +40,7 @@ def benchmark_session(session, input_name, size, iters=300):
     return sum(times) / len(times)
 
 
-from core.paths import model
+from core.base.paths import model
 
 if __name__ == "__main__":
     base = Path(__file__).parent.parent

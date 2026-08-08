@@ -1,0 +1,1 @@
+"""map subpackage for ArknightsAuto."""

@@ -9,11 +9,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-from core.tile_pos import TilePosCalculator
+from core.capture.capture import WindowCapture
+from core.map.tile_pos import TilePosCalculator
 
 
-from core.paths import game_data
+from core.base.paths import game_data
 
 def load_stage_info(code: str | None, name: str | None) -> dict | None:
     """从 levels.json 查找关卡信息，返回包含 width/height/view 的字典。"""

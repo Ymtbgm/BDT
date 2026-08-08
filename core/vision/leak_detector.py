@@ -2,7 +2,7 @@ import time
 import cv2
 import numpy as np
 from typing import Optional, Callable
-from .capture import WindowCapture
+from core.capture.capture import WindowCapture
 
 
 class LeakDetector:

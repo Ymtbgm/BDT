@@ -9,8 +9,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
-from core.paths import game_template
+from core.capture.capture import WindowCapture
+from core.base.paths import game_template
 
 
 # 默认 ROI 为 2560x1600 分辨率下的绝对屏幕坐标

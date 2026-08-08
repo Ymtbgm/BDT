@@ -121,7 +121,7 @@ class SummonDefinition(BaseModel):
         return self.is_class_a() and self.skill_lock_enabled
 
 
-from core.paths import SUMMONS_DIR
+from core.base.paths import SUMMONS_DIR
 
 
 class SummonDefinitionRegistry:

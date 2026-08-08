@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from core.paths import GUI_TEMPLATE_DIR
+from core.base.paths import GUI_TEMPLATE_DIR
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QGraphicsDropShadowEffect,

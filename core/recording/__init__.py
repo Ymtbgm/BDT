@@ -1,0 +1,1 @@
+"""recording subpackage for ArknightsAuto."""

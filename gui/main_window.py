@@ -10,16 +10,16 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QAbstractItemView, QMessageBox,
     QFileDialog, QSpinBox, QComboBox, QTabWidget,
     QCheckBox, QTextEdit, QGroupBox, QListWidget,
-    QSizePolicy,
+    QSizePolicy, QProgressBar,
 )
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from PyQt6.QtGui import QIcon
 
 import action
-from core.capture import WindowCapture
-from core.region_state_timer import RegionStateTimer
-from core.recorder import ActionRecorder
-from core.paths import get_project_root, gui_template
+from core.capture.capture import WindowCapture
+from core.game_state.region_state_timer import RegionStateTimer
+from core.recording.recorder import ActionRecorder
+from core.base.paths import get_project_root, gui_template
 from gui.timer_overlay import TimerOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo
@@ -125,6 +125,12 @@ class MainWindow(QMainWindow):
     btn_resource_browse: QPushButton
     btn_update_resource: QPushButton
     resource_status: QLabel
+    chk_levels_auto_update: QCheckBox
+    chk_levels_auto_download: QCheckBox
+    line_levels_metadata_url: QLineEdit
+    btn_levels_check_update: QPushButton
+    progress_levels_update: QProgressBar
+    label_levels_update_status: QLabel
 
     # 划火柴 Tab
     chk_matchstick_select: QCheckBox
@@ -315,6 +321,11 @@ class MainWindow(QMainWindow):
                     "enabled": self.chk_matchstick_50.isChecked(),
                 },
             },
+            "levels_auto_update": {
+                "enabled": self.chk_levels_auto_update.isChecked(),
+                "auto_download": self.chk_levels_auto_download.isChecked(),
+                "metadata_url": self.line_levels_metadata_url.text(),
+            },
         }
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -406,6 +417,16 @@ class MainWindow(QMainWindow):
             speed=self._normalize_key_name(config.get("speed_key", "f")),
         )
 
+        # levels.json 自动更新配置
+        levels_auto_update = config.get("levels_auto_update", {})
+        self.chk_levels_auto_update.setChecked(levels_auto_update.get("enabled", True))
+        self.chk_levels_auto_download.setChecked(levels_auto_update.get("auto_download", True))
+        self.line_levels_metadata_url.setText(
+            levels_auto_update.get("metadata_url", "")
+        )
+        # 启用状态联动
+        self.chk_levels_auto_download.setEnabled(self.chk_levels_auto_update.isChecked())
+
         # 划火柴热键配置
         matchstick = config.get("matchstick", {})
         for op, widget_key, widget_chk in (
@@ -493,6 +514,9 @@ class MainWindow(QMainWindow):
 
         # 所有 UI 控件创建完成后再加载配置，避免信号处理时访问未创建的控件
         self._apply_config(self._load_config())
+
+        # 若启用自动检查，启动后后台静默检查更新
+        self.resource_tab.trigger_auto_check()
 
     # 以下方法仍由外部/Tab 通过 main_window 调用，保持公共接口
     def _on_matchstick_enabled_changed(self, state):

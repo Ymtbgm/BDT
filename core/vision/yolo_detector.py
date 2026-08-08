@@ -14,8 +14,8 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from core.logging_utils import log_error, log_info
-from core.paths import model
+from core.base.logging_utils import log_error, log_info
+from core.base.paths import model
 
 
 # 与 YOLO 检测模型部署指南保持一致

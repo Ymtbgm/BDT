@@ -20,18 +20,19 @@ if os.path.isdir(_resource_dir):
             _dst = os.path.relpath(_root, _project_root)
             datas.append((_src, _dst))
 
-hiddenimports = ['paddleocr', 'paddlex', 'paddle', 'cv2', 'numpy', 'pydantic', 'action', 'onnxruntime']
+hiddenimports = ['paddleocr', 'paddlex', 'paddle', 'cv2', 'numpy', 'pydantic', 'action', 'onnxruntime', 'requests', 'urllib3']
 # 收集本地包下的所有子模块，防止 PyInstaller 静态分析遗漏
 # 显式列出模块名更可靠（collect_submodules 在某些环境下可能无法解析本地包）
 hiddenimports += [
-    'gui', 'gui.app', 'gui.main_window',
-    'core', 'core.capture', 'core.ocr_engine', 'core.executor', 'core.grid_mapper',
-    'core.timer', 'core.operator_pool', 'core.leak_detector', 'core.stage_selector',
-    'core.retry_handler', 'core.cost_bar_calibration', 'core.cost_bar_start',
-    'core.cost_bar_sync', 'core.cost_bar_sync_cc', 'core.region_state_timer',
-    'core.summon_registry', 'core.avatar_matcher', 'core.tile_pos',
-    'core.cost_recognition', 'core.resolver', 'core.digit_recognizer',
-    'core.onnx_utils', 'core.logging_utils', 'core.yolo_detector', 'core.paths',
+    'gui', 'gui.app', 'gui.main_window', 'gui.workers', 'gui.workers.levels_update_worker',
+    'core', 'core.capture.capture', 'core.vision.ocr_engine', 'core.control.executor', 'core.map.grid_mapper',
+    'core.game_state.timer', 'core.game_state.operator_pool', 'core.vision.leak_detector', 'core.control.stage_selector',
+    'core.control.retry_handler', 'core.game_state.cost_bar_calibration', 'core.game_state.cost_bar_start',
+    'core.game_state.cost_bar_sync', 'core.game_state.cost_bar_sync_cc', 'core.game_state.region_state_timer',
+    'core.game_state.summon_registry', 'core.vision.avatar_matcher', 'core.map.tile_pos',
+    'core.vision.cost_recognition', 'core.recording.resolver', 'core.vision.digit_recognizer',
+    'core.base.onnx_utils', 'core.base.logging_utils', 'core.vision.yolo_detector', 'core.base.paths',
+    'core.update', 'core.update.levels_updater',
     'models', 'models.script_schema', 'models.raw_recording',
     'action',
 ]

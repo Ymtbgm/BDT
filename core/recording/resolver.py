@@ -9,13 +9,13 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 import cv2
 import numpy as np
 
-from core.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
-from core.ocr_engine import OCREngine
-from core.digit_recognizer import DigitRecognizer
-from core.yolo_detector import QuantityBadgeDetector
-from core import cost_recognition
-import core.constants as constants
-from core.paths import position_data
+from core.vision.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
+from core.vision.ocr_engine import OCREngine
+from core.vision.digit_recognizer import DigitRecognizer
+from core.vision.yolo_detector import QuantityBadgeDetector
+from core.vision import cost_recognition
+import core.base.constants as constants
+from core.base.paths import position_data
 from models.raw_recording import RawRecording, RawAction, KeyframeType
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo, SummonInfo, SummonBinding
 

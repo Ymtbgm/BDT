@@ -52,13 +52,13 @@ except Exception:
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
-from core.cost_bar_sync import CostBarSync
-from core.region_state_timer import _RateTemplateMatcher, RegionStateTimer
-from core import constants
+from core.capture.capture import WindowCapture
+from core.game_state.cost_bar_sync import CostBarSync
+from core.game_state.region_state_timer import _RateTemplateMatcher, RegionStateTimer
+from core.base import constants
 
 
-from core.paths import GAME_TEMPLATE_DIR
+from core.base.paths import GAME_TEMPLATE_DIR
 
 # 区域 B 默认 ROI 与 RegionStateTimer 一致
 ROI_B = RegionStateTimer.DEFAULT_ROI_B

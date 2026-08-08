@@ -6,8 +6,8 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from core import onnx_utils  # noqa: F401; 触发 ORT_LOGGING_LEVEL 设置
-from core.logging_utils import log_error, log_info
+from core.base import onnx_utils  # noqa: F401; 触发 ORT_LOGGING_LEVEL 设置
+from core.base.logging_utils import log_error, log_info
 
 
 @contextlib.contextmanager

@@ -47,9 +47,11 @@ class GuideTab(QWidget):
                 <li><b>键位设置</b>：<span style="color: red;">键位务必和游戏中对应快捷键位一致</span>，可以下拉选择，也可以输入。运行一次脚本后自动保存。</li>
             </ul>
             <h3>4. 资源更新</h3>
-            <p>在「资源更新」标签页中可以上传新的 levels.json 文件。</p>
-            levels.json为游戏解包关卡资源，包含了不同关卡相机位置，为了精准对齐格子需要更新加载。<br>
-            资源可在https://github.com/yuanyan3060/ArknightsGameResource中获取，请为该解包和格子对齐项目点上star吧！<br>
+            <p>在「资源更新」标签页中可以上传或自动更新 levels.json 文件。</p>
+            levels.json 为游戏解包关卡资源，包含了不同关卡相机位置，为了精准对齐格子需要保持更新。<br>
+            程序默认会在启动时自动从国内 OSS 检查并下载最新 levels.json；你也可以关闭自动下载，仅检查更新后手动确认。<br>
+            如需手动替换，levels.json 文件仍会覆盖到 resource/game_data/levels.json。<br>
+            原始资源来自 <a href="https://github.com/yuanyan3060/ArknightsGameResource">yuanyan3060/ArknightsGameResource</a>，请为该解包和格子对齐项目点上 star 吧！<br>
             <h3>5. 快捷键</h3>
             <ul>
                 <li><b>F11</b>：暂停/恢复脚本</li>

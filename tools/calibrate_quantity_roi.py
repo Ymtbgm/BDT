@@ -41,7 +41,7 @@ import win32gui
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
+from core.capture.capture import WindowCapture
 
 # 与 core/resolver.py 保持一致
 _BAR_CAPTURE_TOP_RATIO = 1370 / 1600
@@ -304,7 +304,7 @@ def set_window_topmost(win_name: str) -> None:
         print(f"窗口置顶失败: {e}")
 
 
-from core.paths import game_template
+from core.base.paths import game_template
 
 
 LEVEL_LOGO_PATH = game_template("level_logo.png")

@@ -1,6 +1,6 @@
 import action
-from core.capture import WindowCapture
-from core.region_state_timer import RegionStateTimer
+from core.capture.capture import WindowCapture
+from core.game_state.region_state_timer import RegionStateTimer
 from gui.timer_overlay import TimerOverlay
 
 from PyQt6.QtWidgets import (

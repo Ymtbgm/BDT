@@ -9,12 +9,12 @@ import cv2
 import numpy as np
 from pynput.keyboard import Listener
 
-from core.capture import WindowCapture
-from core.cost_bar_start import CostBarStartDetector
-from core.cost_bar_sync import CostBarSync
-from core.cost_bar_sync_cc import CostBarSyncCC
-import core.constants as constants
-from core.paths import GAME_TEMPLATE_DIR, game_template
+from core.capture.capture import WindowCapture
+from core.game_state.cost_bar_start import CostBarStartDetector
+from core.game_state.cost_bar_sync import CostBarSync
+from core.game_state.cost_bar_sync_cc import CostBarSyncCC
+import core.base.constants as constants
+from core.base.paths import GAME_TEMPLATE_DIR, game_template
 
 
 class _TimerResolutionManager:

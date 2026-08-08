@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import cv2
 import numpy as np
 
-from core.avatar_matcher import ONNXResNetAvatarMatcher, _default_onnx_path
+from core.vision.avatar_matcher import ONNXResNetAvatarMatcher, _default_onnx_path
 
 
 def main():

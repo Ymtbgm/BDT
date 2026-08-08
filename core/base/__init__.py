@@ -1,0 +1,1 @@
+"""base subpackage for ArknightsAuto."""

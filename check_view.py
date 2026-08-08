@@ -1,7 +1,7 @@
 import json
 from collections import defaultdict
 
-from core.paths import game_data
+from core.base.paths import game_data
 
 with open(game_data("levels.json"), "r", encoding="utf-8") as f:
     levels = json.load(f)

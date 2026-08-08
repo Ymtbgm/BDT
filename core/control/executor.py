@@ -5,16 +5,16 @@ import cv2
 import numpy as np
 from pydantic import BaseModel
 
-import core.constants as constants
-import core.cost_recognition as cost_recognition
+import core.base.constants as constants
+import core.vision.cost_recognition as cost_recognition
 
-from core.capture import WindowCapture
-from core.grid_mapper import GridMapper
-from core.timer import StageTimer
-from core.ocr_engine import OCREngine
-from core.operator_pool import OperatorPool
-from core.cost_bar_sync import CostBarSync
-from core.cost_bar_sync_cc import CostBarSyncCC
+from core.capture.capture import WindowCapture
+from core.map.grid_mapper import GridMapper
+from core.game_state.timer import StageTimer
+from core.vision.ocr_engine import OCREngine
+from core.game_state.operator_pool import OperatorPool
+from core.game_state.cost_bar_sync import CostBarSync
+from core.game_state.cost_bar_sync_cc import CostBarSyncCC
 from models.script_schema import ScriptModel, ActionType, OperatorAction, SummonBinding
 
 

@@ -32,9 +32,9 @@ import win32con
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
-from core.cost_recognition import preprocess_cost_image, preprocess_cost_image_inv
-import core.constants as constants
+from core.capture.capture import WindowCapture
+from core.vision.cost_recognition import preprocess_cost_image, preprocess_cost_image_inv
+import core.base.constants as constants
 
 # 数量角标默认 ROI（<=12 slot 动态估算）
 _QUANTITY_Y_RATIO = 1535 / 1600
@@ -45,7 +45,7 @@ _BAR_TOP_RATIO = 1370 / 1600
 _BAR_HEIGHT_RATIO = 230 / 1600
 
 
-from core.paths import position_data
+from core.base.paths import position_data
 
 
 def _load_calibration_config(total_slots: int, name: str) -> Optional[dict]:

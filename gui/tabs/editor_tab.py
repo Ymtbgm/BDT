@@ -367,7 +367,7 @@ class EditorTab(QWidget):
         self.main_window.script.stage_code = code or None
         # grid_rows/grid_cols 由 levels.json 根据 stage_code 自动推导
         if code:
-            from core.tile_pos import load_stage_dimensions
+            from core.map.tile_pos import load_stage_dimensions
             dims = load_stage_dimensions(code)
             if dims:
                 self.main_window.script.grid_cols, self.main_window.script.grid_rows = dims

@@ -1,6 +1,6 @@
 from typing import Tuple, Optional
 import numpy as np
-from core.tile_pos import TilePosCalculator
+from core.map.tile_pos import TilePosCalculator
 
 
 class GridMapper:

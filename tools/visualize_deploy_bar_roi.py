@@ -11,8 +11,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import core.constants as constants
-from core.capture import WindowCapture
+import core.base.constants as constants
+from core.capture.capture import WindowCapture
 
 # 与 core/resolver.py 保持一致
 _BAR_CAPTURE_TOP_RATIO = 1370 / 1600

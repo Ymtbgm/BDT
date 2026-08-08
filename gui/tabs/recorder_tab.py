@@ -11,10 +11,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 import action
-from core.capture import WindowCapture
-from core.ocr_engine import OCREngine
-from core.recorder import ActionRecorder
-from core.region_state_timer import RegionStateTimer
+from core.capture.capture import WindowCapture
+from core.vision.ocr_engine import OCREngine
+from core.recording.recorder import ActionRecorder
+from core.game_state.region_state_timer import RegionStateTimer
 from gui.info_collection_overlay import InfoCollectionOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ItemInfo

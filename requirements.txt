@@ -11,3 +11,4 @@ pynput>=1.7
 PyQt6>=6.5
 onnxruntime>=1.16
 onnx>=1.14
+requests>=2.31

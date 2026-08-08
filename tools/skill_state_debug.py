@@ -9,14 +9,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import cv2
 import numpy as np
 
-from core.avatar_matcher import (
+from core.vision.avatar_matcher import (
     ensure_resnet18_onnx,
     ONNXResNetAvatarMatcher,
     ResNetAvatarMatcher,
     LogoMiniCNNMatcher,
 )
-from core.capture import WindowCapture
-from core.tile_pos import TilePosCalculator
+from core.capture.capture import WindowCapture
+from core.map.tile_pos import TilePosCalculator
 
 
 def to_gray(image: np.ndarray) -> np.ndarray:
@@ -51,7 +51,7 @@ def ncc_score(roi: np.ndarray, template: np.ndarray) -> float:
     return float(np.max(result))
 
 
-from core.paths import game_data, gui_template
+from core.base.paths import game_data, gui_template
 
 def resolve_template_path(raw: str) -> Path:
     p = Path(raw)

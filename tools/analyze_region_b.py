@@ -10,7 +10,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
+from core.capture.capture import WindowCapture
 
 
 # 区域 B 默认 ROI (2560x1600 绝对屏幕坐标)

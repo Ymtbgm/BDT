@@ -5,9 +5,9 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-from core.ocr_engine import OCREngine
-import core.constants as constants
+from core.capture.capture import WindowCapture
+from core.vision.ocr_engine import OCREngine
+import core.base.constants as constants
 
 
 def recognize_operator_costs(

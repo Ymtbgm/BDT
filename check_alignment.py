@@ -2,8 +2,8 @@ import sys
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-from core.tile_pos import TilePosCalculator
+from core.capture.capture import WindowCapture
+from core.map.tile_pos import TilePosCalculator
 
 
 def main():

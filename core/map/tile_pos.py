@@ -79,7 +79,7 @@ def _guess_view(grid_cols: int, grid_rows: int) -> Tuple[Tuple[float, float, flo
     return _DEFAULT_VIEW_NORMAL, _DEFAULT_VIEW_SIDE
 
 
-from core.paths import game_data
+from core.base.paths import game_data
 
 
 def _levels_json_path() -> Path:
@@ -87,16 +87,43 @@ def _levels_json_path() -> Path:
     return game_data("levels.json")
 
 
+_LEVELS_CACHE: Optional[list] = None
+_LEVELS_MTIME: Optional[float] = None
+
+
 def _load_levels() -> list:
     """加载并缓存 levels.json 内容。"""
+    global _LEVELS_CACHE, _LEVELS_MTIME
+
     p = _levels_json_path()
     if not p.exists():
+        _LEVELS_CACHE = None
+        _LEVELS_MTIME = None
         return []
+
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        mtime = None
+
+    if _LEVELS_CACHE is not None and _LEVELS_MTIME is not None and mtime == _LEVELS_MTIME:
+        return _LEVELS_CACHE
+
     try:
         with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        _LEVELS_CACHE = data
+        _LEVELS_MTIME = mtime
+        return data
     except Exception:
         return []
+
+
+def invalidate_levels_cache() -> None:
+    """清空 levels.json 缓存，通常在文件被替换后调用。"""
+    global _LEVELS_CACHE, _LEVELS_MTIME
+    _LEVELS_CACHE = None
+    _LEVELS_MTIME = None
 
 
 def _load_view_from_json(code: Optional[str] = None, name: Optional[str] = None) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:

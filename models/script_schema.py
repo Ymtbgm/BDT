@@ -75,7 +75,7 @@ class ScriptModel(BaseModel):
 
         code = data.get("stage_code")
         if code:
-            from core.tile_pos import load_stage_dimensions
+            from core.map.tile_pos import load_stage_dimensions
             dims = load_stage_dimensions(code)
             if dims:
                 width, height = dims

@@ -4,10 +4,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from core.capture import WindowCapture
-from core.cost_bar_calibration import CostBarCalibration, get_calibration
-import core.constants as constants
-from core.paths import game_template
+from core.capture.capture import WindowCapture
+from core.game_state.cost_bar_calibration import CostBarCalibration, get_calibration
+import core.base.constants as constants
+from core.base.paths import game_template
 
 
 class CostBarSyncCC:

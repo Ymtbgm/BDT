@@ -10,9 +10,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.capture import WindowCapture
-from core.region_state_timer import RegionStateTimer
-from core.paths import GAME_TEMPLATE_DIR
+from core.capture.capture import WindowCapture
+from core.game_state.region_state_timer import RegionStateTimer
+from core.base.paths import GAME_TEMPLATE_DIR
 
 
 def _load_template(path: str) -> Optional[np.ndarray]:

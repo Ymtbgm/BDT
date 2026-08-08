@@ -13,7 +13,7 @@ import action
 import cv2
 import numpy as np
 
-from core.paths import gui_template
+from core.base.paths import gui_template
 def _prepare_bg_pixmap(pixmap: QPixmap, opacity: float = 0.35) -> QPixmap:
     """对背景图降低不透明度，产生透明感，保留透明通道。"""
     if pixmap.isNull():
