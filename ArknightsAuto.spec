@@ -24,7 +24,7 @@ hiddenimports = ['paddleocr', 'paddlex', 'paddle', 'cv2', 'numpy', 'pydantic', '
 # 收集本地包下的所有子模块，防止 PyInstaller 静态分析遗漏
 # 显式列出模块名更可靠（collect_submodules 在某些环境下可能无法解析本地包）
 hiddenimports += [
-    'gui', 'gui.app', 'gui.main_window', 'gui.workers', 'gui.workers.levels_update_worker',
+    'gui', 'gui.app', 'gui.main_window', 'gui.widgets', 'gui.widgets.toast', 'gui.workers', 'gui.workers.levels_update_worker',
     'core', 'core.capture.capture', 'core.vision.ocr_engine', 'core.control.executor', 'core.map.grid_mapper',
     'core.game_state.timer', 'core.game_state.operator_pool', 'core.vision.leak_detector', 'core.control.stage_selector',
     'core.control.retry_handler', 'core.game_state.cost_bar_calibration', 'core.game_state.cost_bar_start',

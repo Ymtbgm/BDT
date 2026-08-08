@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from core.base.paths import game_data
 from core.update.levels_updater import LevelsUpdater, UpdateError
 from gui.workers.levels_update_worker import LevelsUpdateWorker
+from gui.widgets.toast import Toast
 
 
 class ResourceTab(QWidget):
@@ -123,9 +124,10 @@ class ResourceTab(QWidget):
         url = self.main_window.line_levels_metadata_url.text().strip()
         return url or LevelsUpdater.DEFAULT_METADATA_URL
 
-    def _check_update(self):
+    def _check_update(self, silent: bool = False):
         if self._update_worker is not None and self._update_worker.isRunning():
-            QMessageBox.information(self.main_window, "提示", "正在检查更新，请稍候")
+            if not silent:
+                QMessageBox.information(self.main_window, "提示", "正在检查更新，请稍候")
             return
 
         self.main_window.btn_levels_check_update.setEnabled(False)
@@ -138,16 +140,24 @@ class ResourceTab(QWidget):
             auto_download=auto_download,
             parent=self,
         )
-        self._update_worker.check_finished.connect(self._on_check_finished)
+        self._update_worker.check_finished.connect(
+            lambda avail, info: self._on_check_finished(avail, info, silent)
+        )
         self._update_worker.download_progress.connect(self._on_download_progress)
-        self._update_worker.download_finished.connect(self._on_download_finished)
-        self._update_worker.error_occurred.connect(self._on_error)
+        self._update_worker.download_finished.connect(
+            lambda success, msg: self._on_download_finished(success, msg, silent)
+        )
+        self._update_worker.error_occurred.connect(
+            lambda msg: self._on_error(msg, silent)
+        )
         self._update_worker.finished.connect(self._on_worker_finished)
         self._update_worker.start()
 
-    def _on_check_finished(self, update_available: bool, info_dict: dict | None):
+    def _on_check_finished(self, update_available: bool, info_dict: dict | None, silent: bool = False):
         if not update_available:
             self.main_window.label_levels_update_status.setText("状态: 已是最新版本")
+            if silent:
+                Toast.show_message(self.main_window, "levels.json 已是最新版本")
             return
 
         size = info_dict.get("size", 0)
@@ -164,18 +174,27 @@ class ResourceTab(QWidget):
             f"下载中: {current / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB"
         )
 
-    def _on_download_finished(self, success: bool, message: str):
+    def _on_download_finished(self, success: bool, message: str, silent: bool = False):
         if success:
             self.main_window.label_levels_update_status.setText(f"状态: {message}")
             self.main_window.resource_status.setText("状态: 已通过自动更新同步")
-            QMessageBox.information(self.main_window, "更新成功", message)
+            if silent:
+                Toast.show_message(self.main_window, f"levels.json {message}")
+            else:
+                QMessageBox.information(self.main_window, "更新成功", message)
         else:
             self.main_window.label_levels_update_status.setText(f"状态: 更新失败 - {message}")
-            QMessageBox.critical(self.main_window, "更新失败", message)
+            if silent:
+                Toast.show_message(self.main_window, f"levels.json 更新失败: {message}")
+            else:
+                QMessageBox.critical(self.main_window, "更新失败", message)
 
-    def _on_error(self, message: str):
+    def _on_error(self, message: str, silent: bool = False):
         self.main_window.label_levels_update_status.setText(f"状态: 检查失败 - {message}")
-        QMessageBox.critical(self.main_window, "检查失败", message)
+        if silent:
+            Toast.show_message(self.main_window, f"levels.json 检查失败: {message}")
+        else:
+            QMessageBox.critical(self.main_window, "检查失败", message)
 
     def _on_worker_finished(self):
         self.main_window.btn_levels_check_update.setEnabled(True)
@@ -185,4 +204,4 @@ class ResourceTab(QWidget):
         """由 MainWindow 在启动时调用，仅在自动检查启用时执行。"""
         if not self.main_window.chk_levels_auto_update.isChecked():
             return
-        self._check_update()
+        self._check_update(silent=True)
