@@ -80,19 +80,12 @@ jobs:
         run: |
           ./ossutil64 cp "oss://${OSS_BUCKET}/${OSS_PREFIX}/metadata.json" existing_metadata.json -f || true
           if [ -f existing_metadata.json ]; then
-            python3 - <<'PY'
-          import json, os
-          try:
-              old = json.load(open('existing_metadata.json', encoding='utf-8'))
-              sha = old.get('sha256', '')
-          except Exception:
-              sha = ''
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
-              f.write(f'old_sha256={sha}\n')
-          PY
+            OLD_SHA256=$(python3 -c "import json; print(json.load(open('existing_metadata.json', encoding='utf-8')).get('sha256',''))")
           else
-            echo 'old_sha256=' >> "$GITHUB_OUTPUT"
+            OLD_SHA256=""
           fi
+          echo "old_sha256=$OLD_SHA256" >> "$GITHUB_OUTPUT"
+          echo "Existing sha256: $OLD_SHA256"
 
       - name: Upload to OSS if changed
         if: steps.existing.outputs.old_sha256 != steps.meta.outputs.sha256
