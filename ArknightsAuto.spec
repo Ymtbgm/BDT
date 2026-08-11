@@ -26,7 +26,7 @@ hiddenimports = ['paddleocr', 'paddlex', 'paddle', 'cv2', 'numpy', 'pydantic', '
 hiddenimports += [
     'gui', 'gui.app', 'gui.main_window', 'gui.widgets', 'gui.widgets.toast', 'gui.workers', 'gui.workers.levels_update_worker',
     'core', 'core.capture.capture', 'core.vision.ocr_engine', 'core.control.executor', 'core.map.grid_mapper',
-    'core.game_state.timer', 'core.game_state.operator_pool', 'core.vision.leak_detector', 'core.control.stage_selector',
+    'core.game_state.timer', 'core.game_state.operator_pool', 'core.game_state.ui_scale_check', 'core.vision.leak_detector', 'core.control.stage_selector',
     'core.control.retry_handler', 'core.game_state.cost_bar_calibration', 'core.game_state.cost_bar_start',
     'core.game_state.cost_bar_sync', 'core.game_state.cost_bar_sync_cc', 'core.game_state.region_state_timer',
     'core.game_state.summon_registry', 'core.vision.avatar_matcher', 'core.map.tile_pos',
