@@ -1,5 +1,6 @@
 import json
 import time
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -11,13 +12,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 import action
+from core.base.paths import get_project_root
 from core.capture.capture import WindowCapture
 from core.vision.ocr_engine import OCREngine
 from core.recording.recorder import ActionRecorder
 from core.game_state.region_state_timer import RegionStateTimer
 from gui.info_collection_overlay import InfoCollectionOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
-from models.script_schema import ItemInfo
+from models.script_schema import ItemInfo, ScriptModel
 
 
 class RecorderTab(QWidget):
@@ -39,6 +41,23 @@ class RecorderTab(QWidget):
         self.main_window.rec_stage_code.setPlaceholderText("如 1-7")
         self.main_window.rec_stage_code.setMaximumWidth(80)
         row.addWidget(self.main_window.rec_stage_code)
+        row.addStretch()
+        param_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("装载脚本:"))
+        self.main_window.rec_loaded_script_path = QLineEdit()
+        self.main_window.rec_loaded_script_path.setPlaceholderText("选择要预执行的脚本...")
+        self.main_window.rec_loaded_script_path.setReadOnly(True)
+        row.addWidget(self.main_window.rec_loaded_script_path)
+        self.main_window.btn_rec_load_script = QPushButton("浏览")
+        self.main_window.btn_rec_load_script.clicked.connect(self._browse_loaded_script)
+        row.addWidget(self.main_window.btn_rec_load_script)
+        self.main_window.btn_rec_clear_script = QPushButton("清除")
+        self.main_window.btn_rec_clear_script.clicked.connect(self._clear_loaded_script)
+        row.addWidget(self.main_window.btn_rec_clear_script)
+        self.main_window.rec_loaded_script_status = QLabel("当前未装载脚本")
+        row.addWidget(self.main_window.rec_loaded_script_status)
         row.addStretch()
         param_layout.addLayout(row)
 
@@ -68,6 +87,21 @@ class RecorderTab(QWidget):
             "部署区初始道具种类数。道具将排列在部署栏最右侧。"
         )
         row.addWidget(self.main_window.rec_initial_item_count)
+        row.addStretch()
+        param_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("费用条 tag:"))
+        self.main_window.rec_cost_tag = QComboBox()
+        self.main_window.rec_cost_tag.addItem("无", "")
+        self.main_window.rec_cost_tag.addItem("费用回复降低25%", "cc_25")
+        self.main_window.rec_cost_tag.addItem("费用回复降低50%", "cc_50")
+        self.main_window.rec_cost_tag.addItem("费用回复降低75%", "cc_75")
+        self.main_window.rec_cost_tag.setToolTip(
+            "选择关卡的费用条校准 tag；通常只有危机合约/特殊关卡需要选择。"
+        )
+        self.main_window.rec_cost_tag.setMaximumWidth(200)
+        row.addWidget(self.main_window.rec_cost_tag)
         row.addStretch()
         param_layout.addLayout(row)
 
@@ -174,8 +208,10 @@ class RecorderTab(QWidget):
         self.main_window.rec_stage_code.textChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_operator_count.valueChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_item_count.valueChanged.connect(self.main_window._save_config)
+        self.main_window.rec_cost_tag.currentIndexChanged.connect(self.main_window._save_config)
         self.main_window.combo_rec_debug.item_changed.connect(self.main_window._save_config)
         self.main_window.rec_chk_support_op.stateChanged.connect(self.main_window._save_config)
+        self.main_window.rec_loaded_script_path.textChanged.connect(self._update_loaded_script_status)
 
         # 使用说明
         guide_label = QLabel()
@@ -184,10 +220,10 @@ class RecorderTab(QWidget):
         guide_label.setText(
             "<h3>使用说明</h3>"
             "<ul>"
-            "<li>在编队界面点击开始录制，引导显示 加载完毕，请进入作战... 即可进入作战。</li>"
-            "<li>进入作战后检测到费用条启动即开始记录。</li>"
+            "<li>在编队界面点击开始录制，显示'加载完毕，请进入作战...'即可进入作战。初次点击后不需要再点击悬浮窗开始录制</li>"
             "<li>干员被击退前请主动撤退，否则也会错位。</li>"
-            "<li>F10停止录制。</li>"
+            "<li>F10为快捷键停止录制，在完成按下悬浮窗'结束录制'完成一次录制后，在编队界面再次点击开始录制即可继续下一次录制。</li>"
+            "<li>装载脚本后，在编队界面不需要操作，会自动执行脚本，脚本结束后会自动暂停，继续游戏会自动继续录制操作，也可以中途手动接管。</li>"
             "<li>录制结束后会自动离线识别并生成脚本，若出现 __unknown__ / __item__ 可以手动修正，这是因为该单位未被部署，不修正不会影响脚本正常执行。</li>"
             "</ul>"
         )
@@ -202,7 +238,7 @@ class RecorderTab(QWidget):
 
         self.main_window.btn_rec_stop = QPushButton("停止录制")
         self.main_window.btn_rec_stop.setEnabled(False)
-        self.main_window.btn_rec_stop.clicked.connect(self._stop_recording)
+        self.main_window.btn_rec_stop.clicked.connect(self._on_rec_stop_clicked)
         btn_layout.addWidget(self.main_window.btn_rec_stop)
 
         self.main_window.btn_rec_save = QPushButton("导出脚本")
@@ -225,6 +261,35 @@ class RecorderTab(QWidget):
         )
         for checkbox in self.findChildren(QCheckBox):
             checkbox.setStyleSheet(checkbox_green_fill_style)
+
+    def _browse_loaded_script(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self.main_window, "选择要装载的脚本", "", "JSON 文件 (*.json)"
+        )
+        if not path:
+            return
+        self.main_window.rec_loaded_script_path.setText(path)
+        self._update_loaded_script_status()
+        self.main_window._save_config()
+
+    def _clear_loaded_script(self):
+        self.main_window.rec_loaded_script_path.setText("")
+        self._update_loaded_script_status()
+        self.main_window._save_config()
+
+    def _update_loaded_script_status(self):
+        path = self.main_window.rec_loaded_script_path.text().strip()
+        if path:
+            self.main_window.rec_loaded_script_status.setText(
+                f"已装载 {Path(path).name}"
+            )
+        else:
+            self.main_window.rec_loaded_script_status.setText("当前未装载脚本")
+        overlay = getattr(self.main_window, "_recorder_overlay", None)
+        if overlay is not None:
+            overlay.set_script_status(
+                f"已装载 {Path(path).name}" if path else "当前未装载脚本"
+            )
 
     def _parse_recorder_operators(self) -> list:
         operators = []
@@ -264,6 +329,26 @@ class RecorderTab(QWidget):
             items.append(ItemInfo(name=name, charges=charges))
         return items
 
+    def _load_loaded_script(self, path: str):
+        """加载要预执行的脚本，失败时弹出提示并返回 None。"""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return ScriptModel.model_validate(data)
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "装载脚本失败",
+                f"无法读取脚本 {path}:\n{e}",
+            )
+            return None
+
+    def _on_rec_takeover(self):
+        """悬浮窗“手动接管”按钮回调。"""
+        if self.main_window._recorder is not None:
+            self.main_window._recorder.take_over()
+            self.main_window.rec_status.setText("状态: 已请求手动接管")
+
     def _start_recording(self):
         initial_operator_count = self.main_window.rec_initial_operator_count.value()
         if initial_operator_count <= 0:
@@ -274,6 +359,24 @@ class RecorderTab(QWidget):
         if not stage_code:
             QMessageBox.warning(self.main_window, "参数错误", "请填写关卡代号（如 1-7）。")
             return
+
+        loaded_script_path = self.main_window.rec_loaded_script_path.text().strip()
+        loaded_script = None
+        if loaded_script_path:
+            loaded_script = self._load_loaded_script(loaded_script_path)
+            if loaded_script is None:
+                return
+            if loaded_script.stage_code != stage_code:
+                QMessageBox.warning(
+                    self.main_window,
+                    "关卡不一致",
+                    f"装载脚本的关卡为 {loaded_script.stage_code}，"
+                    f"与录制参数中的 {stage_code} 不一致，请检查。",
+                )
+                return
+
+        # 如果已有悬浮窗/录制器，先清理掉，重新走完整流程
+        self._cleanup_recorder_overlay()
 
         try:
             self.main_window._recorder_capture = WindowCapture(backend="mss")
@@ -294,6 +397,11 @@ class RecorderTab(QWidget):
         self._recording_overlay_switch_at = 0.0
 
         overlay = InfoCollectionOverlay(debug=rec_debug)
+        overlay.set_button_callbacks(
+            start_callback=self._start_recording,
+            stop_callback=self._stop_recording,
+            takeover_callback=self._on_rec_takeover,
+        )
         overlay.set_phase("正在初始化 OCR...")
         overlay.show()
         QApplication.processEvents()
@@ -303,11 +411,16 @@ class RecorderTab(QWidget):
             ocr = OCREngine(engine=None, debug=rec_debug, use_gpu=True)
         except Exception as e:
             overlay.close_overlay()
+            self.main_window._recorder_overlay = None
             QMessageBox.critical(self.main_window, "错误", f"OCR 初始化失败:\n{e}")
             return
 
         self.main_window.showMinimized()
-        overlay.set_phase("请保持编队界面...")
+        if loaded_script is not None:
+            overlay.set_phase("脚本操作中...")
+        else:
+            overlay.set_phase("请保持编队界面...")
+        overlay.set_recording_state(True)
         QApplication.processEvents()
 
         def _resolver_log(line: str):
@@ -327,11 +440,17 @@ class RecorderTab(QWidget):
             support_count=support_count,
             pause_key=action.pause_key(),
             matchstick_hotkeys=self.main_window.timer_tab._build_matchstick_hotkeys() or None,
-            cost_bar_calibration_name=self.main_window.combo_timer_cost_tag.currentData() or None,
+            cost_bar_calibration_name=self.main_window.rec_cost_tag.currentData() or None,
             ocr=ocr,
             resolver_log_callback=_resolver_log if rec_debug_resolver else None,
+            loaded_script=loaded_script,
+            loaded_script_path=loaded_script_path,
+        )
+        self.main_window._recorder.set_takeover_callback(
+            lambda show: overlay.show_takeover_mode(show)
         )
         self.main_window._recorder_overlay = overlay
+        self._update_loaded_script_status()
         self.main_window._recorder.start()
 
         self.main_window._recorder_poll_timer = QTimer(self.main_window)
@@ -339,9 +458,27 @@ class RecorderTab(QWidget):
         self.main_window._recorder_poll_timer.start(33)
 
         self.main_window.btn_rec_start.setEnabled(False)
+        self.main_window.btn_rec_stop.setText("停止录制")
         self.main_window.btn_rec_stop.setEnabled(True)
         self.main_window.btn_rec_save.setEnabled(False)
         self.main_window.rec_status.setText("加载完毕，请进入作战...")
+
+    def _cleanup_recorder_overlay(self):
+        """清理现有录制器和悬浮窗（不保存），用于重新录制前重置。"""
+        if hasattr(self.main_window, "_recorder_poll_timer") and self.main_window._recorder_poll_timer is not None:
+            self.main_window._recorder_poll_timer.stop()
+            self.main_window._recorder_poll_timer = None
+        if self.main_window._recorder is not None:
+            try:
+                self.main_window._recorder.stop()
+            except Exception:
+                pass
+            self.main_window._recorder = None
+        self.main_window._recorder_capture = None
+        overlay = getattr(self.main_window, "_recorder_overlay", None)
+        if overlay is not None:
+            overlay.close_overlay()
+            self.main_window._recorder_overlay = None
 
     def _poll_recorder_state(self):
         if self.main_window._recorder is None:
@@ -356,7 +493,12 @@ class RecorderTab(QWidget):
             print(f"[recorder_tab poll] state={state} started={getattr(self, '_normal_overlay_started', False)} timer_mode={getattr(self, '_recorder_overlay_timer_mode', False)} switch_at={getattr(self, '_recording_overlay_switch_at', 0):.3f} now={time.time():.3f}")
         if overlay is not None:
             if state == "WAITING_FOR_START":
-                if getattr(self.main_window._recorder, "is_squad_capture_done", lambda: False)():
+                has_loaded_script = getattr(self.main_window._recorder, "loaded_script", None) is not None
+                if has_loaded_script:
+                    if debug:
+                        print("[recorder_tab poll] set_phase 脚本操作中...")
+                    overlay.set_phase("脚本操作中...")
+                elif getattr(self.main_window._recorder, "is_squad_capture_done", lambda: False)():
                     if debug:
                         print("[recorder_tab poll] set_phase 识别完成，可以开始进入作战")
                     overlay.set_phase("识别完成，可以开始进入作战")
@@ -375,6 +517,14 @@ class RecorderTab(QWidget):
                     if debug:
                         print("[recorder_tab poll] switch to timer")
                     self._switch_recorder_overlay_to_timer()
+            elif state == "EXECUTING_LOADED_SCRIPT":
+                if debug:
+                    print("[recorder_tab poll] set_phase 脚本操作中...")
+                overlay.set_phase("脚本操作中...")
+            elif state == "TRANSITIONING_TO_TAKEOVER":
+                if debug:
+                    print("[recorder_tab poll] set_phase 正在转为接管状态...")
+                overlay.set_phase("正在转为接管状态...")
             # 计时显示一旦启用，就不应受状态机影响，保证拖拽/选方向时时间仍刷新
             if getattr(self, "_recorder_overlay_timer_mode", False):
                 if debug:
@@ -433,6 +583,58 @@ class RecorderTab(QWidget):
             timer.is_manual_paused(),
         )
 
+    def _on_rec_stop_clicked(self):
+        """主窗口“停止录制/关闭悬浮窗”按钮的统一入口。"""
+        if self.main_window._recorder is not None:
+            self._stop_recording()
+        elif getattr(self.main_window, "_recorder_overlay", None) is not None:
+            self._close_recorder_overlay()
+
+    def _close_recorder_overlay(self):
+        """关闭悬浮窗并恢复主窗口。"""
+        self._cleanup_recorder_overlay()
+        self.main_window.showNormal()
+        self.main_window.btn_rec_start.setEnabled(True)
+        self.main_window.btn_rec_stop.setText("停止录制")
+        self.main_window.btn_rec_stop.setEnabled(False)
+        self.main_window.rec_status.setText("状态: 悬浮窗已关闭")
+
+    def _auto_save_script(self, script, stage_code: str, loaded_script_path: str = "") -> Path:
+        """自动保存脚本到 scripts/ 目录，序号递增避免覆盖。
+
+        当存在装载脚本时，保存为 <原脚本名>_new_001.json；
+        否则按关卡代号保存为 <stage_code>_001.json。
+        """
+        scripts_dir = get_project_root() / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+
+        if loaded_script_path:
+            base = Path(loaded_script_path).stem
+            pattern = f"{base}_new_*.json"
+        else:
+            base = stage_code
+            pattern = f"{base}_*.json"
+
+        existing_nums = set()
+        for p in scripts_dir.glob(pattern):
+            try:
+                suffix = p.stem.split("_")[-1]
+                existing_nums.add(int(suffix))
+            except ValueError:
+                continue
+
+        num = 1
+        while num in existing_nums:
+            num += 1
+
+        if loaded_script_path:
+            path = scripts_dir / f"{base}_new_{num:03d}.json"
+        else:
+            path = scripts_dir / f"{base}_{num:03d}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(script.model_dump(), f, ensure_ascii=False, indent=2)
+        return path
+
     def _stop_recording(self):
         self._normal_overlay_started = False
         self._recorder_overlay_timer_mode = False
@@ -440,27 +642,60 @@ class RecorderTab(QWidget):
         if hasattr(self.main_window, "_recorder_poll_timer") and self.main_window._recorder_poll_timer is not None:
             self.main_window._recorder_poll_timer.stop()
             self.main_window._recorder_poll_timer = None
+
         overlay = getattr(self.main_window, "_recorder_overlay", None)
+        stage_code = ""
+        loaded_script_path = ""
+        if self.main_window._recorder is not None:
+            stage_code = getattr(self.main_window._recorder, "stage_code", "") or ""
+            loaded_script_path = getattr(self.main_window._recorder, "loaded_script_path", "") or ""
+
+        # 悬浮窗保持打开，显示生成中
         if overlay is not None:
-            overlay.close_overlay()
-            self.main_window._recorder_overlay = None
+            overlay.set_phase("脚本生成中...")
+            overlay.set_recording_state(False)
+            overlay.start_button.setEnabled(False)
+            overlay.stop_button.setEnabled(False)
+            QApplication.processEvents()
+
         script = None
         if self.main_window._recorder is not None:
             script = self.main_window._recorder.stop()
             self.main_window._last_recorded_script = script
             self.main_window._recorder = None
         self.main_window._recorder_capture = None
-        self.main_window.showNormal()
+
+        saved_path = None
+        if script is not None:
+            try:
+                saved_path = self._auto_save_script(script, stage_code, loaded_script_path)
+            except Exception as e:
+                if overlay is not None:
+                    overlay.set_phase(f"保存失败: {e}")
+                else:
+                    QMessageBox.critical(self.main_window, "保存失败", str(e))
+
+        # 更新主界面表格（后台）
+        if script is not None:
+            self._populate_recorder_tables(script)
+
+        if overlay is not None:
+            if saved_path is not None:
+                overlay.set_save_path(saved_path)
+            overlay.set_recording_state(False)
+            overlay.start_button.setEnabled(True)
+            overlay.stop_button.setEnabled(False)
 
         self.main_window.btn_rec_start.setEnabled(True)
-        self.main_window.btn_rec_stop.setEnabled(False)
+        self.main_window.btn_rec_stop.setText("关闭悬浮窗")
+        self.main_window.btn_rec_stop.setEnabled(True)
         self.main_window.btn_rec_save.setEnabled(True)
-        recorded = getattr(self.main_window, "_last_recorded_script", None)
-        action_count = len(recorded.actions) if recorded is not None else 0
+
+        action_count = len(script.actions) if script is not None else 0
         self.main_window.rec_status.setText(f"状态: 录制完成，共 {action_count} 个操作")
 
-        if recorded is not None:
-            self._populate_recorder_tables(recorded)
+        if saved_path is not None:
+            self.main_window.log_text.append(f"[录制] 自动保存脚本: {saved_path}")
 
     def _populate_recorder_tables(self, script):
         """用解析后的脚本回填录制界面的干员/道具列表，方便用户审阅与保存配置。"""

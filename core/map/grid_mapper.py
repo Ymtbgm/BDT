@@ -53,14 +53,15 @@ class GridMapper:
         y = int((row + 0.5) * self._cell_h)
         return x, y
 
-    def pixel_to_grid(self, x: int, y: int) -> Tuple[int, int]:
-        if self._use_precise and self._positions:
+    def pixel_to_grid(self, x: int, y: int, side: bool = False) -> Tuple[int, int]:
+        positions = self._positions_side if side else self._positions_normal
+        if self._use_precise and positions:
             # 精确模式下格子大小不均匀，遍历找最近点
             best_r, best_c = 0, 0
             best_dist = float("inf")
             for r in range(self.grid_rows):
                 for c in range(self.grid_cols):
-                    px, py = self._positions[r][c]
+                    px, py = positions[r][c]
                     dist = (px - x) ** 2 + (py - y) ** 2
                     if dist < best_dist:
                         best_dist = dist

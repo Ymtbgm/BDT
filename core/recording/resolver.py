@@ -168,6 +168,8 @@ class OfflineResolver:
         debug: bool = False,
         avatar_model_name: str = "resnet18",
         log_callback: Optional[Callable[[str], None]] = None,
+        initial_deployed: Optional[Dict[Tuple[int, int], str]] = None,
+        initial_bar_state: Optional[List[Dict]] = None,
     ):
         self.raw = raw
         self.debug = debug
@@ -188,7 +190,8 @@ class OfflineResolver:
         self._items: List[ItemInfo] = []
         self._summons: List[SummonInfo] = []
         self._actions: List[OperatorAction] = []
-        self._deployed: Dict[Tuple[int, int], str] = {}
+        self._deployed: Dict[Tuple[int, int], str] = dict(initial_deployed) if initial_deployed else {}
+        self._initial_bar_state: Optional[List[Dict]] = initial_bar_state
 
         self._item_count_hint = int(raw.hints.get("initial_item_count", 0))
         self._support_count = int(raw.hints.get("support_count", 0))
@@ -211,6 +214,7 @@ class OfflineResolver:
         self._summon_deploy_counts: Dict[str, int] = {}
         self._summon_costs: Dict[str, int] = {}
         self._add_summon_inferences: List[_AddSummonInference] = []
+        self._initial_summon_quantities: Dict[str, int] = {}
         self._initial_slot_info: Dict[int, _InitialSlotInfo] = {}
 
         # 召唤物 obs_id 方案：解析阶段每个召唤物 slot 都是独立观察，最后聚类合并
@@ -300,7 +304,11 @@ class OfflineResolver:
             return result
 
         _step("加载编队模板", self._load_squad_templates)
-        _step("构建初始部署区状态", self._build_initial_bar_state)
+        if self._initial_bar_state is not None:
+            _step("应用脚本执行后的部署区状态", self._apply_initial_bar_state)
+        else:
+            _step("构建初始部署区状态", self._build_initial_bar_state)
+        _step("记录初始召唤物数量", self._record_initial_summon_quantities)
         _step("正向处理所有动作", self._process_actions_forward)
         self._obs_id_to_final = _step("召唤物聚类", self._cluster_summon_obs)
         _step("重写召唤物名称", self._rewrite_actions_with_final_summon_names)
@@ -308,6 +316,7 @@ class OfflineResolver:
         _step("OCR 重命名名称卡", self._rewrite_deploy_card_names)
         relabeled = _step("识别冷却召唤物", self._identify_cooldown_summons)
         _step("清理冗余召唤物动作", self._cleanup_redundant_summon_actions, relabeled)
+        _step("按数量修剪冗余 ADD_SUMMON", self._prune_redundant_add_summons_by_quantity)
         _step("修正 ADD_SUMMON delta", self._correct_add_summon_deltas)
         script = _step("构建最终脚本", self._build_script)
 
@@ -681,6 +690,77 @@ class OfflineResolver:
         )
         self._log(f"[耗时] 构建初始部署区状态: {(time.perf_counter()-t0)*1000:.1f}ms")
 
+    def _apply_initial_bar_state(self):
+        """直接使用执行器导出的部署栏状态作为初始 bar 状态。
+
+        这样可以避免录制器把脚本执行后剩余的干员/道具当成 unknown 或召唤物 obs，
+        保证后续用户录制的第一条 DEPLOY/RETREAT/SKILL 能解析到正确名称。
+        """
+        t0 = time.perf_counter()
+        state_dicts = self._initial_bar_state or []
+        slots: List[_SlotState] = []
+        self._remaining_item_count = 0
+        for i, d in enumerate(state_dicts):
+            slot = _SlotState(
+                name=d.get("name", f"__unknown_{i}__"),
+                is_item=bool(d.get("is_item", False)),
+                is_summon=bool(d.get("is_summon", False)),
+                is_infinite=bool(d.get("is_infinite", False)),
+                original_bar_index=d.get("original_bar_index", i),
+                quantity=d.get("quantity"),
+                cost=d.get("cost"),
+                avatar=None,
+            )
+            slots.append(slot)
+            if slot.is_item:
+                self._item_bar_index[slot.name] = i
+                self._item_initial_quantity[slot.name] = (
+                    slot.quantity if slot.quantity is not None else 1
+                )
+                self._remaining_item_count += 1
+                if slot.is_infinite:
+                    self._infinite_items[i] = _InfiniteItem(
+                        original_bar_index=i,
+                        expected_cost=slot.cost or 0,
+                        name=slot.name,
+                        present=True,
+                        avatar=None,
+                    )
+                    self._summon_costs[slot.name] = slot.cost or 0
+                    self._summon_deploy_counts[slot.name] = 0
+            elif slot.is_summon:
+                self._summon_costs[slot.name] = slot.cost or 0
+                self._summon_deploy_counts[slot.name] = 0
+            else:
+                self._operator_index[slot.name] = i
+                self._operator_info[slot.name] = slot
+        self._prev_bar_state = slots
+        self._initial_operator_order = [
+            s.name for s in reversed(slots)
+            if not s.is_item and not s.is_summon
+        ]
+        self._log(
+            f"应用脚本执行后的部署区状态: total={len(slots)}, "
+            f"items={self._remaining_item_count}, "
+            f"operators={len(self._operator_index)}, "
+            f"summons={len(self._summon_costs)}, "
+            f"slots={[f'{s.name}(cost={s.cost},qty={s.quantity})' for s in slots]}"
+        )
+        self._log(f"[耗时] 应用初始部署区状态: {(time.perf_counter()-t0)*1000:.1f}ms")
+
+    def _record_initial_summon_quantities(self):
+        """在正向处理前记录初始部署栏中各召唤物的数量，供后续 ADD_SUMMON 修剪使用。"""
+        self._initial_summon_quantities = {
+            slot.name: slot.quantity
+            for slot in self._prev_bar_state
+            if slot.is_summon and not slot.is_infinite and slot.quantity is not None
+        }
+        if self.debug and self._initial_summon_quantities:
+            self._log(
+                f"初始召唤物数量: "
+                f"{[(n, q) for n, q in self._initial_summon_quantities.items()]}"
+            )
+
     # ------------------------------------------------------------------
     # 无限道具处理
     # ------------------------------------------------------------------
@@ -699,6 +779,14 @@ class OfflineResolver:
 
     def _item_name_at_current_index(self, current_index: int) -> str:
         """根据当前 bar_index 返回道具名称（基于原始 bar_index 顺序）。"""
+        # 如果当前索引已有已知道具名称，直接复用，避免把实际道具名覆盖成 __item_N__
+        if (
+            0 <= current_index < len(self._prev_bar_state)
+            and self._prev_bar_state[current_index].is_item
+            and not self._prev_bar_state[current_index].name.startswith("__item_")
+        ):
+            return self._prev_bar_state[current_index].name
+
         present_original: List[Tuple[int, bool]] = []
         for slot in self._prev_bar_state:
             if slot.is_item and slot.name.startswith("__item_"):
@@ -1588,7 +1676,8 @@ class OfflineResolver:
                     )
                     self._item_bar_index[name] = i
                 else:
-                    # 召唤物：分配唯一 obs_id，最后聚类时再决定真实身份
+                    # 召唤物：统一分配新 obs_id，最后聚类决定真实身份。
+                    # 不继承上一状态，避免脚本接管后把初始部署栏已有的召唤物错当成新召唤物。
                     shifted_avatar = self._crop_slot_avatar(
                         bar_img, i, total_slots, y_shift=y_shift, active_slot=active_slot
                     )
@@ -3742,6 +3831,73 @@ class OfflineResolver:
             f"({(time.perf_counter() - t0) * 1000:.1f}ms)"
         )
 
+    def _prune_redundant_add_summons_by_quantity(self):
+        """按召唤物数量时间线修剪冗余 ADD_SUMMON。
+
+        对每个召唤物，收集每次 DEPLOY 前部署栏中的数量。相邻两次观察之间：
+          - 若本次数量等于“上次数量 - 上次是否部署了该召唤物”（即没有净增加），
+            则期间的 ADD_SUMMON 是冗余的，删除；
+          - 否则视为合法补充，保留。
+        第一次观察与初始部署栏数量比较。
+        """
+        if not self._deploy_snapshots:
+            return
+        t0 = time.perf_counter()
+
+        observations: Dict[str, List[Tuple[int, int, bool]]] = {}
+        for snap_time_ms, _prev_state, pre_state, deployed_name in self._deploy_snapshots:
+            deployed_final = self._obs_id_to_final.get(deployed_name, deployed_name)
+            for slot in pre_state:
+                if not slot.is_summon or slot.is_infinite or slot.quantity is None:
+                    continue
+                final_name = self._obs_id_to_final.get(slot.name, slot.name)
+                if not final_name:
+                    continue
+                is_self_deploy = final_name == deployed_final
+                observations.setdefault(final_name, []).append(
+                    (snap_time_ms, slot.quantity, is_self_deploy)
+                )
+
+        for name in observations:
+            observations[name].sort(key=lambda x: x[0])
+
+        indices_to_delete: Set[int] = set()
+        for idx, action in enumerate(self._actions):
+            if action.action != ActionType.ADD_SUMMON or not action.operator_name:
+                continue
+            name = action.operator_name
+            obs = observations.get(name)
+            if not obs:
+                continue
+            t = action.time_ms
+            prev_time: Optional[int] = None
+            prev_qty = self._initial_summon_quantities.get(name, 0)
+            prev_self_deploy = False
+            for d_time, d_qty, is_self in obs:
+                expected_qty = prev_qty - (1 if prev_self_deploy else 0)
+                if (prev_time is None or t > prev_time) and t <= d_time:
+                    if d_qty == expected_qty:
+                        indices_to_delete.add(idx)
+                        if self.debug:
+                            self._log(
+                                f"  删除冗余 ADD_SUMMON {name} @ {t}ms "
+                                f"(期望数量 {expected_qty} == 实际 {d_qty})"
+                            )
+                    break
+                prev_time = d_time
+                prev_qty = d_qty
+                prev_self_deploy = is_self
+
+        if indices_to_delete:
+            self._actions = [
+                a for i, a in enumerate(self._actions)
+                if i not in indices_to_delete
+            ]
+        self._log(
+            f"[耗时] 按数量修剪冗余 ADD_SUMMON: 删除 {len(indices_to_delete)} 个 "
+            f"({(time.perf_counter() - t0) * 1000:.1f}ms)"
+        )
+
     def _correct_add_summon_deltas(self):
         """全局修正 ADD_SUMMON 数量为真实 delta（新增 Charge 数）。
 
@@ -3783,7 +3939,9 @@ class OfflineResolver:
                 remove_time_ms = max(0, snap_time_ms - 1)
                 remove_qty_map[(final_name, remove_time_ms)] = qty
 
-        current_qty: Dict[str, int] = {}
+        current_qty: Dict[str, int] = dict(self._initial_summon_quantities)
+        if self.debug and current_qty:
+            self._log(f"  初始召唤物数量作为 delta 修正基准: {current_qty}")
         new_actions: List[OperatorAction] = []
         corrected_count = 0
         deleted_count = 0
@@ -3971,6 +4129,11 @@ class OfflineResolver:
             for obs_id, final_name in list(self._obs_id_to_final.items()):
                 if final_name == old_name:
                     self._obs_id_to_final[obs_id] = new_name
+
+        # 同步更新初始召唤物数量表的键名，保证后续数量比较使用的是最终名称
+        for old_name, new_name in list(renames.items()):
+            if old_name in self._initial_summon_quantities:
+                self._initial_summon_quantities[new_name] = self._initial_summon_quantities.pop(old_name)
 
         self._log(f"[耗时] OCR 重命名: {(time.perf_counter() - t0) * 1000:.1f}ms, 重命名 {len(renames)} 个")
 

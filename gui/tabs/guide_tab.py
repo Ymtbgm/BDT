@@ -14,7 +14,7 @@ class GuideTab(QWidget):
         guide_text.setReadOnly(True)
         guide_text.setHtml(
             """
-            <h2>Arknights Auto 使用指南</h2>
+            <h2>Blood Demon Toolbox 使用指南</h2>
             <h3>1. 脚本编辑</h3>
             <p>在「脚本编辑」标签页中创建或修改 JSON 脚本。</p>
             <ul>

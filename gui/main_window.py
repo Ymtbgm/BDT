@@ -149,10 +149,15 @@ class MainWindow(QMainWindow):
 
     # 操作录制 Tab
     rec_stage_code: QLineEdit
+    rec_loaded_script_path: QLineEdit
+    rec_loaded_script_status: QLabel
+    btn_rec_load_script: QPushButton
+    btn_rec_clear_script: QPushButton
     rec_chk_support_op: QCheckBox
     combo_rec_debug: CheckedComboBox
     rec_initial_operator_count: QSpinBox
     rec_initial_item_count: QSpinBox
+    rec_cost_tag: QComboBox
     rec_op_table: QTableWidget
     rec_op_input: QLineEdit
     rec_op_cost_input: QSpinBox
@@ -176,7 +181,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Arknights Auto")
+        self.setWindowTitle("Blood Demon Toolbox")
         # 兼容开发环境与 PyInstaller onedir 打包后的图标路径
         _icon_path = str(gui_template("Icon.ico"))
         if not os.path.exists(_icon_path):
@@ -274,7 +279,9 @@ class MainWindow(QMainWindow):
 
     def _save_config(self):
         path = self._config_path()
-        config = {
+        # 先读取已有配置，保留本方法未显式维护的键（如 ui_scale_check_disabled）
+        config = self._load_config()
+        config.update({
             "last_script_path": self.exec_script_path.text(),
             "loop": self.chk_loop.isChecked(),
             "leak": self.chk_leak.isChecked(),
@@ -286,6 +293,8 @@ class MainWindow(QMainWindow):
             "rec_debug_keys": self.combo_rec_debug.checked_data(),
             "rec_support_op": self.rec_chk_support_op.isChecked(),
             "rec_stage_code": self.rec_stage_code.text(),
+            "rec_loaded_script_path": self.rec_loaded_script_path.text(),
+            "rec_cost_tag": self.rec_cost_tag.currentData() or "",
             "rec_initial_operator_count": self.rec_initial_operator_count.value(),
             "rec_initial_item_count": self.rec_initial_item_count.value(),
             "rec_operators": [
@@ -326,7 +335,7 @@ class MainWindow(QMainWindow):
                 "auto_download": self.chk_levels_auto_download.isChecked(),
                 "metadata_url": self.line_levels_metadata_url.text(),
             },
-        }
+        })
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
@@ -367,6 +376,12 @@ class MainWindow(QMainWindow):
             self.combo_rec_debug.set_checked_data(legacy_keys)
         self.rec_chk_support_op.setChecked(config.get("rec_support_op", False))
         self.rec_stage_code.setText(config.get("rec_stage_code", ""))
+        self.rec_loaded_script_path.setText(config.get("rec_loaded_script_path", ""))
+        rec_cost_tag = config.get("rec_cost_tag", "")
+        if rec_cost_tag:
+            idx = self.rec_cost_tag.findData(rec_cost_tag)
+            if idx >= 0:
+                self.rec_cost_tag.setCurrentIndex(idx)
         self.rec_initial_operator_count.setValue(config.get("rec_initial_operator_count", 12))
         self.rec_initial_item_count.setValue(config.get("rec_initial_item_count", 0))
         self.rec_op_table.setRowCount(0)

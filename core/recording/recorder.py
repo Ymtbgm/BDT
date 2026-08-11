@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 from pathlib import Path
@@ -11,11 +12,28 @@ import action
 import core.base.constants as constants
 from core.vision.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
 from core.capture.capture import WindowCapture
+from core.control.executor import ScriptExecutor
+from core.control.stage_selector import StageSelector
+from core.game_state.cost_bar_sync_cc import CostBarSyncCC
+from core.game_state.cost_bar_calibration import list_calibrations
 from core.vision.ocr_engine import OCREngine
 from core.game_state.region_state_timer import RegionStateTimer
 from core.map.tile_pos import TilePosCalculator, load_stage_dimensions
 from models.raw_recording import RawRecording, RawAction, Keyframe, KeyframeType
-from models.script_schema import ScriptModel, ActionType
+from models.script_schema import ScriptModel, ActionType, OperatorAction
+
+
+class _NoResetTimerWrapper:
+    """包装 RegionStateTimer，阻止 ScriptExecutor 在运行结束后 reset 计时器。"""
+
+    def __init__(self, timer: RegionStateTimer):
+        self._timer = timer
+
+    def __getattr__(self, name: str):
+        return getattr(self._timer, name)
+
+    def reset(self):
+        pass
 
 
 class ActionRecorder:
@@ -70,6 +88,9 @@ class ActionRecorder:
     _TIMEOUT_DEPLOY_DIR = 2.0
     _TIMEOUT_UNIT_SELECT = 2.0
 
+    # side 视角下，部署落点整体偏下一行，判定前将坐标上移 25px
+    _SIDE_GRID_Y_OFFSET = -25
+
     def __init__(
         self,
         capture: WindowCapture,
@@ -88,6 +109,8 @@ class ActionRecorder:
         ocr: Optional[OCREngine] = None,
         avatar_model_name: str = "resnet18",
         resolver_log_callback: Optional[Callable[[str], None]] = None,
+        loaded_script: Optional[ScriptModel] = None,
+        loaded_script_path: Optional[str] = None,
     ):
         self.capture = capture
         self.timer = timer
@@ -104,6 +127,15 @@ class ActionRecorder:
         self._cost_bar_calibration_name = cost_bar_calibration_name
         self.avatar_model_name = avatar_model_name
         self.resolver_log_callback = resolver_log_callback
+
+        self.loaded_script = loaded_script
+        self.loaded_script_path = loaded_script_path
+        self._executed_actions: List[OperatorAction] = []
+        self._initial_deployed: Dict[Tuple[int, int], str] = {}
+        self._initial_bar_state: Optional[List[Dict]] = None
+        self._takeover_requested = False
+        self._on_takeover_callback: Optional[Callable[[], None]] = None
+        self._on_script_executed_callback: Optional[Callable[[], None]] = None
 
         self.initial_operator_count = max(0, initial_operator_count)
         self.initial_item_count = max(0, initial_item_count)
@@ -203,6 +235,10 @@ class ActionRecorder:
         self._unknown_counter = 0
         self._pending_bar_captures.clear()
         self._bar_capture_seq = 0
+        self._executed_actions.clear()
+        self._initial_deployed.clear()
+        self._initial_bar_state = None
+        self._takeover_requested = False
         self._reset_state()
 
         self._state = "WAITING_FOR_START"
@@ -210,6 +246,15 @@ class ActionRecorder:
         self._wait_thread.start()
         self._log("start() 进入 WAITING_FOR_START，等待 cost 检测...")
 
+        # 无预装载脚本时立即启动输入监听器；
+        # 有预装载脚本时，监听器在脚本执行完成/接管后由 _start_recording_listeners 启动
+        if self.loaded_script is None:
+            self._start_recording_listeners()
+
+    def _start_recording_listeners(self):
+        """启动鼠标/键盘监听器，开始记录用户操作。"""
+        if self._mouse_listener is not None or self._keyboard_listener is not None:
+            return
         self._mouse_listener = mouse.Listener(
             on_click=self._on_click,
             on_move=self._on_move,
@@ -220,6 +265,15 @@ class ActionRecorder:
         self._mouse_listener.start()
         self._keyboard_listener.start()
         self._log("监听器已启动")
+
+    def _stop_recording_listeners(self):
+        """停止鼠标/键盘监听器。"""
+        if self._mouse_listener:
+            self._mouse_listener.stop()
+            self._mouse_listener = None
+        if self._keyboard_listener:
+            self._keyboard_listener.stop()
+            self._keyboard_listener = None
 
     def stop(self) -> ScriptModel:
         if not self._recording:
@@ -468,6 +522,8 @@ class ActionRecorder:
             avatar_model_name=self.avatar_model_name,
             avatar_matcher=self._avatar_matcher,
             log_callback=self.resolver_log_callback,
+            initial_deployed=self._initial_deployed,
+            initial_bar_state=self._initial_bar_state,
         ).resolve()
         elapsed = (time.perf_counter() - t0) * 1000
         placeholders = [
@@ -480,6 +536,47 @@ class ActionRecorder:
             f"summons={len(script.summons)}, actions={len(script.actions)}, "
             f"placeholders={len(set(placeholders))}"
         )
+
+        # 若有预装载脚本已执行的操作，合并到解析结果前面
+        if self._executed_actions:
+            base = self.loaded_script.model_copy(deep=True) if self.loaded_script else script.model_copy(deep=True)
+            merged_actions = list(self._executed_actions)
+            # 用户录制操作的时间应接在已执行操作之后
+            last_executed_ms = max((a.time_ms for a in merged_actions), default=0)
+            for a in script.actions:
+                copied = a.model_copy(deep=True)
+                copied.time_ms = max(copied.time_ms, last_executed_ms)
+                merged_actions.append(copied)
+            merged_actions.sort(key=lambda x: x.time_ms)
+            base.actions = merged_actions
+
+            # 合并用户录制阶段出现的新干员/道具/召唤物/绑定，避免基础脚本里没有这些单位
+            seen_ops = set(base.operators)
+            for name in script.operators:
+                if name not in seen_ops:
+                    base.operators.append(name)
+                    seen_ops.add(name)
+
+            seen_items = {it.name for it in base.items}
+            for it in script.items:
+                if it.name not in seen_items:
+                    base.items.append(it.model_copy(deep=True))
+                    seen_items.add(it.name)
+
+            seen_sums = {s.name for s in base.summons}
+            for s in script.summons:
+                if s.name not in seen_sums:
+                    base.summons.append(s.model_copy(deep=True))
+                    seen_sums.add(s.name)
+
+            seen_bindings = {b.operator_name for b in base.summon_bindings}
+            for b in script.summon_bindings:
+                if b.operator_name not in seen_bindings:
+                    base.summon_bindings.append(b.model_copy(deep=True))
+                    seen_bindings.add(b.operator_name)
+
+            return base
+
         return script
 
     def _build_raw_recording(self) -> RawRecording:
@@ -511,6 +608,9 @@ class ActionRecorder:
         return abs_x - left, abs_y - top
 
     def _nearest_grid(self, win_x: int, win_y: int, side: bool = False) -> Optional[Tuple[int, int]]:
+        # side 视角下部署落点偏下一行，判定前将坐标上移固定像素（按当前分辨率缩放）
+        if side:
+            win_y += int(round(self._SIDE_GRID_Y_OFFSET * self._scale_y))
         # side 视角下使用投影四边形命中测试，避免“落在 A 格内但离 B 格中心更近”的误判
         if side:
             hit = self.tile_calc.hit_test(win_x, win_y, side=True)
@@ -800,18 +900,22 @@ class ActionRecorder:
         # 等待主窗口完成最小化，避免截图捕捉到 GUI 自身
         time.sleep(2.0)
 
-        # 1. 先截取编队界面关键帧
-        try:
-            self._capture_squad_keyframes()
-            self._squad_keyframes_captured = True
-        except Exception as e:
-            self._log(f"编队关键帧截取异常: {e}")
+        if self.loaded_script is not None:
+            # 预装载脚本模式：从编队界面自动进入战斗
+            self._enter_battle_from_squad()
+        else:
+            # 1. 先截取编队界面关键帧
+            try:
+                self._capture_squad_keyframes()
+                self._squad_keyframes_captured = True
+            except Exception as e:
+                self._log(f"编队关键帧截取异常: {e}")
 
-        # 2. 预加载头像匹配器并缓存模板特征（在编队界面完成，不占用战斗时间）
-        try:
-            self._preload_avatar_matcher()
-        except Exception as e:
-            self._log(f"预加载头像匹配器异常: {e}")
+            # 2. 预加载头像匹配器并缓存模板特征（在编队界面完成，不占用战斗时间）
+            try:
+                self._preload_avatar_matcher()
+            except Exception as e:
+                self._log(f"预加载头像匹配器异常: {e}")
 
         # 3. 启动计时器并等待费用条开始
         if not self.timer.is_running():
@@ -827,8 +931,26 @@ class ActionRecorder:
                     self._log(f"计时器已启动 (elapsed={info['elapsed_ms']:.1f}ms)，已保存初始部署区 {team_bar_id}")
                 except Exception as e:
                     self._log(f"初始部署区截图异常: {e}")
+
+                if self.loaded_script is not None:
+                    # 预装载脚本模式：立即暂停游戏，避免后续复制/校准期间时间继续推进
+                    self._log("计时器已启动，立即暂停游戏以准备执行装载脚本...")
+                    with self._lock:
+                        self._state = "EXECUTING_LOADED_SCRIPT"
+                    action.press_key(self._pause_key)
+                    deadline = time.perf_counter() + 1.0
+                    while time.perf_counter() < deadline and not self.timer.is_manual_paused():
+                        time.sleep(0.01)
+
+                    # 预装载脚本模式下由 _execute_loaded_script 继续处理
+                    self._execute_loaded_script()
+
                 with self._lock:
                     self._state = "IDLE"
+
+                # 有预装载脚本且执行完成后才启动监听器
+                if self.loaded_script is not None and not self._stop_requested:
+                    self._start_recording_listeners()
                 break
             time.sleep(self.timer.frame_ms / 1000.0)
 
@@ -838,6 +960,179 @@ class ActionRecorder:
             time.sleep(self.timer.frame_ms / 1000.0)
 
         self._log("_wait_for_timer_start 结束")
+
+    def _enter_battle_from_squad(self):
+        """预装载脚本模式下，从编队界面点击确认开始进入战斗。"""
+        self._log("预装载脚本模式，自动点击进入战斗")
+        try:
+            selector = StageSelector(self.capture, self.ocr, debug=self.debug)
+            asyncio.run(
+                selector.enter_stage(
+                    self.stage_code,
+                    direct_start=True,
+                    should_stop=lambda: self._stop_requested,
+                )
+            )
+        except Exception as e:
+            self._log(f"自动进入战斗异常: {e}")
+
+    def _execute_loaded_script(self):
+        """执行预装载脚本 A；执行完毕或用户接管后暂停并切换到录制模式。
+
+        复用 main.py 的二倍数凸图逻辑：在费用条开始运动后暂停、校准、
+        把当前时间之后的 action 时间压缩一半、切二倍速、恢复，再执行脚本。
+        """
+        if self.loaded_script is None:
+            return
+
+        self._log("开始执行预装载脚本...")
+        with self._lock:
+            self._state = "EXECUTING_LOADED_SCRIPT"
+
+        # 通知 UI 显示接管按钮
+        if self._on_takeover_callback is not None:
+            self._on_takeover_callback(True)
+
+        # 复制脚本，移除开头 time_ms==0 的倍率切换动作，避免后续强制 2x 后重复切换
+        script_to_run = self.loaded_script.model_copy(deep=True)
+        script_to_run.actions = [
+            a for a in script_to_run.actions
+            if not (a.time_ms == 0 and a.action in (ActionType.SPEED_UP, ActionType.SPEED_DOWN))
+        ]
+
+        # 创建 ScriptExecutor，使用不会 reset 的计时器包装
+        executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug)
+        executor.timer = _NoResetTimerWrapper(self.timer)
+
+        # 费用条同步
+        if self._cost_bar_calibration_name:
+            cost_sync = CostBarSyncCC(
+                self.capture,
+                calibration_name=self._cost_bar_calibration_name,
+                debug=self.debug_cost_bar,
+            )
+        else:
+            cost_sync = CostBarSyncCC(
+                self.capture,
+                calibration_name="normal",
+                debug=self.debug_cost_bar,
+            )
+        executor.set_cost_sync(cost_sync)
+
+        # 先加载原始脚本，用于初始校准
+        executor.load_script(script_to_run)
+
+        # ---- 二倍速启动 ----
+        # 进入本函数时游戏已由 _wait_for_timer_start 暂停，稍作稳定后校准
+        self._log("游戏已暂停，准备切换二倍速...")
+        time.sleep(1.0)
+
+        current_ms = executor.calibrate_timer_at_pause()
+        self._log(f"计时器校准点 current_ms={current_ms:.1f}")
+
+        # RegionStateTimer 已按游戏倍率缩放时间，因此不需要像 main.py 那样压缩动作时间；
+        # 只需把游戏切到二倍速，executor 直接按原始 time_ms 等待即可。
+        action.press_key(action.speed_key())
+        time.sleep(0.5)
+
+        self._log("恢复游戏，开始执行脚本...")
+        action.press_key(self._pause_key)
+        deadline = time.perf_counter() + 1.0
+        while time.perf_counter() < deadline and self.timer.is_manual_paused():
+            time.sleep(0.01)
+        time.sleep(0.1)
+
+        # 在独立事件循环中执行，同时轮询接管请求
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._run_executor_with_takeover(executor))
+        finally:
+            loop.close()
+
+        # 脚本已执行完毕或被接管，进入过渡状态：同步场上/部署栏状态、
+        # 导出当前部署区的实际名称与数量给离线解析器，给用户明确的等待提示。
+        with self._lock:
+            self._state = "TRANSITIONING_TO_TAKEOVER"
+        self._log("正在转为接管状态，同步部署区与场上状态...")
+
+        # 同步脚本执行后的场上部署状态到录制器，
+        # 这样用户后续进行撤退/技能操作时才能正确选中已部署单位。
+        pool = getattr(executor, "pool", None)
+        if pool is not None:
+            self._active_grids.update(pool._deployed.values())
+            self._initial_deployed = {
+                grid: name for name, grid in pool._deployed.items()
+            }
+            self._log(
+                f"同步脚本执行后的场上状态: 已部署 {len(self._initial_deployed)} 个单位"
+            )
+
+            # 同步部署栏状态：执行器内部已跟踪道具/召唤物/干员的剩余与排序，
+            # 直接用它推断当前部署区槽位数量，并把实际名称导出给解析器。
+            op_slots, item_slots = pool.get_bar_slot_counts()
+            self.initial_operator_count = op_slots
+            self.initial_item_count = item_slots
+            self._initial_bar_state = pool.export_initial_bar_state()
+            self._log(
+                f"同步脚本执行后的部署栏状态: "
+                f"operator_like_slots={op_slots}, item_slots={item_slots}, "
+                f"slots={[s['name'] for s in self._initial_bar_state]}"
+            )
+
+        # 暂停游戏，切换到用户录制
+        action.press_key(self._pause_key)
+        deadline = time.perf_counter() + 1.0
+        while time.perf_counter() < deadline and not self.timer.is_manual_paused():
+            time.sleep(0.01)
+
+        # 记录已执行的操作（用于最终合并）
+        if not self._takeover_requested:
+            self._executed_actions = [
+                a.model_copy(deep=True) for a in script_to_run.actions
+            ]
+        else:
+            # 接管时只保留已经执行完的部分：当前计时器时间之前的操作
+            current_ms = self.timer.get_elapsed_ms()
+            self._executed_actions = [
+                a.model_copy(deep=True)
+                for a in script_to_run.actions
+                if a.time_ms <= current_ms
+            ]
+
+        # 通知 UI 恢复录制按钮
+        if self._on_takeover_callback is not None:
+            self._on_takeover_callback(False)
+
+        self._log(
+            f"预装载脚本执行结束，已执行 {len(self._executed_actions)} 个操作，"
+            f"接管={self._takeover_requested}"
+        )
+
+    async def _run_executor_with_takeover(self, executor: ScriptExecutor):
+        """在 executor 运行的同时轮询接管/停止请求。"""
+        exec_task = asyncio.create_task(executor.run())
+        while not exec_task.done():
+            if self._takeover_requested or self._stop_requested:
+                executor._stop_event.set()
+                exec_task.cancel()
+                try:
+                    await exec_task
+                except asyncio.CancelledError:
+                    pass
+                break
+            await asyncio.sleep(0.05)
+
+    def take_over(self):
+        """用户点击手动接管：标记接管请求，由执行循环检测后暂停并切换模式。"""
+        if self._state != "EXECUTING_LOADED_SCRIPT":
+            return
+        self._takeover_requested = True
+        self._log("收到手动接管请求")
+
+    def set_takeover_callback(self, callback: Optional[Callable[[bool], None]]):
+        """设置接管模式切换回调，参数 True 表示进入接管模式（显示接管按钮）。"""
+        self._on_takeover_callback = callback
 
     def _now_ms(self) -> float:
         t = self._get_time_ms()

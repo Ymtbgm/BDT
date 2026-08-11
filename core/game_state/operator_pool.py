@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 
 from models.script_schema import ItemInfo, SummonInfo
 
@@ -354,6 +354,59 @@ class OperatorPool:
             self._item_charges[name] = charges
             self._available_items.insert(insert_pos, name)
         self._recalc()
+
+    def get_bar_slot_counts(self) -> Tuple[int, int]:
+        """返回当前部署栏槽位数量：(左侧干员/召唤物槽位数, 右侧道具槽位数)。"""
+        operator_like_slots = len(self._bar_indices) + sum(
+            1 for c in self._summon_charges.values() if c > 0
+        )
+        item_slots = len(self._available_items)
+        return operator_like_slots, item_slots
+
+    def export_initial_bar_state(self) -> List[Dict[str, Any]]:
+        """导出当前部署栏状态，供离线解析器作为初始 bar 状态使用。
+
+        返回的列表按 bar_index 从右到左排列（index 0 为最右侧道具位），
+        包含干员/召唤物/道具的实际名称、类型、数量和费用。
+        """
+        slots: List[Dict[str, Any]] = []
+        # 道具区域：_available_items 本身已是从右到左顺序
+        for i, name in enumerate(self._available_items):
+            slots.append({
+                "name": name,
+                "is_item": True,
+                "is_summon": False,
+                "is_infinite": False,
+                "quantity": self._item_charges.get(name),
+                "cost": 0,
+                "original_bar_index": i,
+            })
+        item_count = len(self._available_items)
+        # 干员/召唤物区域：_get_left_units 返回从左到右顺序，反转为从右到左
+        left_units = self._get_left_units()
+        for offset, name in enumerate(reversed(left_units)):
+            bar_index = item_count + offset
+            if name in self._summons:
+                slots.append({
+                    "name": name,
+                    "is_item": False,
+                    "is_summon": True,
+                    "is_infinite": False,
+                    "quantity": self._summon_charges.get(name),
+                    "cost": self._summons[name],
+                    "original_bar_index": bar_index,
+                })
+            else:
+                slots.append({
+                    "name": name,
+                    "is_item": False,
+                    "is_summon": False,
+                    "is_infinite": False,
+                    "quantity": None,
+                    "cost": self._operator_costs.get(name),
+                    "original_bar_index": bar_index,
+                })
+        return slots
 
     def state_summary(self) -> dict:
         return {

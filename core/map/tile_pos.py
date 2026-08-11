@@ -5,6 +5,16 @@ from pathlib import Path
 from typing import Tuple, Optional
 
 
+# 当 buildableType 缺失时，用 tileKey 判断格子是否可部署
+_NON_DEPLOYABLE_TILE_KEYS: set[str] = {
+    "tile_forbidden",
+    "tile_empty",
+    "tile_hole",
+    "tile_deepwater",
+    "tile_wall",
+}
+
+
 # 基于 levels.json 统计的精确尺寸到 view 映射（合并相近 view，差值 < 0.05）
 _VIEW_MAP_BY_SIZE = {
     (4, 9): ((0.0, -4.81, -7.74), (0.594, -5.31, -8.622)),
@@ -89,16 +99,18 @@ def _levels_json_path() -> Path:
 
 _LEVELS_CACHE: Optional[list] = None
 _LEVELS_MTIME: Optional[float] = None
+_LEVELS_TILES_MAP: Optional[dict[str, list]] = None
 
 
 def _load_levels() -> list:
     """加载并缓存 levels.json 内容。"""
-    global _LEVELS_CACHE, _LEVELS_MTIME
+    global _LEVELS_CACHE, _LEVELS_MTIME, _LEVELS_TILES_MAP
 
     p = _levels_json_path()
     if not p.exists():
         _LEVELS_CACHE = None
         _LEVELS_MTIME = None
+        _LEVELS_TILES_MAP = None
         return []
 
     try:
@@ -114,16 +126,35 @@ def _load_levels() -> list:
             data = json.load(f)
         _LEVELS_CACHE = data
         _LEVELS_MTIME = mtime
+        _LEVELS_TILES_MAP = None
         return data
     except Exception:
         return []
 
 
+def _load_tiles_map() -> dict[str, list]:
+    """构建并缓存 code -> tiles 的映射。"""
+    global _LEVELS_TILES_MAP
+    if _LEVELS_TILES_MAP is None:
+        _LEVELS_TILES_MAP = {}
+        for lv in _load_levels():
+            code = lv.get("code")
+            if code:
+                _LEVELS_TILES_MAP[code] = lv.get("tiles", [])
+    return _LEVELS_TILES_MAP
+
+
+def load_stage_tiles(code: str) -> Optional[list]:
+    """根据关卡 code 从 levels.json 加载 tiles 数据（含 heightType）。"""
+    return _load_tiles_map().get(code)
+
+
 def invalidate_levels_cache() -> None:
     """清空 levels.json 缓存，通常在文件被替换后调用。"""
-    global _LEVELS_CACHE, _LEVELS_MTIME
+    global _LEVELS_CACHE, _LEVELS_MTIME, _LEVELS_TILES_MAP
     _LEVELS_CACHE = None
     _LEVELS_MTIME = None
+    _LEVELS_TILES_MAP = None
 
 
 def _load_view_from_json(code: Optional[str] = None, name: Optional[str] = None) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
@@ -137,6 +168,18 @@ def _load_view_from_json(code: Optional[str] = None, name: Optional[str] = None)
             view = lv.get("view", [])
             if len(view) >= 2:
                 return tuple(view[0]), tuple(view[1])
+    return None
+
+
+def _load_tiles_from_json(code: Optional[str] = None, name: Optional[str] = None) -> Optional[list]:
+    """从本地 levels.json 加载指定关卡的 tiles 数据（含 heightType）。"""
+    if code:
+        tiles = load_stage_tiles(code)
+        if tiles:
+            return tiles
+    for lv in _load_levels():
+        if name and lv.get("name") == name:
+            return lv.get("tiles")
     return None
 
 
@@ -167,6 +210,7 @@ class TilePosCalculator:
         view_side: Optional[Tuple[float, float, float]] = None,
         stage_code: Optional[str] = None,
         stage_name: Optional[str] = None,
+        tiles: Optional[list] = None,
     ):
         self.screen_width = screen_width
         self.screen_height = screen_height
@@ -184,6 +228,14 @@ class TilePosCalculator:
                 self.view_normal, self.view_side = loaded
             else:
                 self.view_normal, self.view_side = _guess_view(grid_cols, grid_rows)
+
+        # 加载 tiles 以获取 heightType；优先使用传入的 tiles
+        if tiles is not None:
+            self.tiles = tiles
+        elif stage_code or stage_name:
+            self.tiles = _load_tiles_from_json(stage_code, stage_name)
+        else:
+            self.tiles = None
 
         self._init_matrices()
 
@@ -208,6 +260,40 @@ class TilePosCalculator:
             [-math.sin(math.pi * 10 / 180), 0, math.cos(math.pi * 10 / 180), 0],
             [0, 0, 0, 1],
         ], dtype=np.float64)
+
+    def _get_tile_height_type(self, row: int, col: int) -> int:
+        """返回指定格子的 heightType（未加载 tiles 时视为 0）。"""
+        if self.tiles and 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
+            try:
+                return self.tiles[row][col].get("heightType", 0)
+            except Exception:
+                pass
+        return 0
+
+    def _get_tile_height(self, row: int, col: int) -> float:
+        """返回指定格子的世界坐标 z 值（heightType * -0.4）。
+
+        与 Arknights-Tile-Pos 参考实现保持一致。若未加载 tiles 则按平地处理。
+        """
+        return self._get_tile_height_type(row, col) * -0.4
+
+    def _is_tile_deployable(self, row: int, col: int) -> bool:
+        """判断指定格子是否可部署。
+
+        优先使用 buildableType（0 表示不可部署）；若缺失则用 tileKey 兜底。
+        """
+        if self.tiles and 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
+            try:
+                tile = self.tiles[row][col]
+                buildable = tile.get("buildableType")
+                if buildable is not None:
+                    return buildable != 0
+                tile_key = tile.get("tileKey")
+                if tile_key and tile_key != "unknown":
+                    return tile_key not in _NON_DEPLOYABLE_TILE_KEYS
+            except Exception:
+                pass
+        return True
 
     def _adapter(self) -> Tuple[float, float]:
         from_ratio = 9 / 16
@@ -244,7 +330,7 @@ class TilePosCalculator:
         h, w = self.grid_rows, self.grid_cols
         wx = col - (w - 1) / 2
         wy = (h - 1) / 2 - row
-        wz = 0.0
+        wz = self._get_tile_height(row, col)
 
         matrix = self._get_transform_matrix(side)
         px, py, _, pw = np.dot(matrix, np.array([wx, wy, wz, 1]))
@@ -268,9 +354,10 @@ class TilePosCalculator:
         """返回指定格子在屏幕上的投影四边形（左上/右上/右下/左下顺序不严格）。
 
         基于格子在世界坐标中占据 [col-0.5, col+0.5] x [row-0.5, row+0.5]
-        的矩形，投影四个角到屏幕。
+        的矩形，投影四个角到屏幕。已考虑 heightType 带来的 z 偏移。
         """
         matrix = self._get_transform_matrix(side)
+        wz = self._get_tile_height(row, col)
 
         corners = [
             (col - 0.5, row - 0.5),
@@ -282,7 +369,7 @@ class TilePosCalculator:
         for wx, wy in corners:
             sx_world = wx - (self.grid_cols - 1) / 2
             sy_world = (self.grid_rows - 1) / 2 - wy
-            px, py, _, pw = np.dot(matrix, np.array([sx_world, sy_world, 0.0, 1]))
+            px, py, _, pw = np.dot(matrix, np.array([sx_world, sy_world, wz, 1]))
             sx = (1 + px / pw) / 2 * self.screen_width
             sy = (1 - py / pw) / 2 * self.screen_height
             screen_corners.append((int(sx), int(sy)))
@@ -293,8 +380,9 @@ class TilePosCalculator:
     ) -> Optional[Tuple[int, int]]:
         """判断屏幕点 (x, y) 落在哪个格子的投影四边形内部。
 
-        优先返回包含该点的格子；若点恰好落在多个四边形重叠处（side 视角边缘），
-        取中心点最近的一个；若完全不命中，返回 None。
+        side 视角下多个格子投影可能重叠：优先选择可部署的高台格，
+        其次可部署的地面格；不可部署的格子（如 tile_forbidden）仅作为视觉背景，
+        不会遮挡背后的可部署格子。同优先级取中心点最近者。
         """
         import cv2
 
@@ -307,8 +395,11 @@ class TilePosCalculator:
                 if dist >= 0:
                     cx, cy = self.get_screen_pos(r, c, side)
                     d = (cx - x) ** 2 + (cy - y) ** 2
-                    candidates.append((d, r, c))
+                    is_deployable = self._is_tile_deployable(r, c)
+                    height_type = self._get_tile_height_type(r, c)
+                    # 可部署 > 不可部署；可部署中高台 > 地面；同优先级取中心最近
+                    candidates.append((-int(is_deployable), -height_type, d, r, c))
         if candidates:
-            candidates.sort(key=lambda item: item[0])
-            return candidates[0][1], candidates[0][2]
+            candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+            return candidates[0][3], candidates[0][4]
         return None
