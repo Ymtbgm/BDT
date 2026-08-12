@@ -49,14 +49,20 @@ class ActionRecorder:
     """
 
     # 基于 2560x1600 的固定 ROI（选中干员后视角居中，按钮位置固定）
-    _RETREAT_X = 1145
-    _RETREAT_Y = 510
+    # side view 下不同地图的摄像机参数不同，按钮中心会系统性偏移，
+    # 因此 x/y 在 __init__ 中根据 tile_calc 的 side view 投影锚点动态计算。
     _RETREAT_W = 170
     _RETREAT_H = 160
-    _SKILL_X = 1615
-    _SKILL_Y = 885
     _SKILL_W = 250
     _SKILL_H = 200
+
+    # side view 下不同地图的摄像机参数不同，按钮中心会系统性偏移。
+    # 这里用一个“等效世界锚点”模型：假设按钮在地图世界坐标系中对应一个固定点 P，
+    # 直接使用 tile_pos 的 side view 透视投影把它投到屏幕上。
+    # 锚点由 0-1 / 7-18 / 7-12 / 11-5 / 13-10 / 14-10 / TO-1/4/5/6/9 / TO-EX-5
+    # 的标定数据拟合得到。
+    _RETREAT_ANCHOR = (-1.396806, 1.056352, -0.166007)   # (px, py, pz)
+    _SKILL_ANCHOR = (1.323576, -1.863407, -0.463183)     # (px, py, pz)
 
     _BASE_W = 2560
     _BASE_H = 1600
@@ -164,6 +170,10 @@ class ActionRecorder:
 
         self._scale_x = w / self._BASE_W
         self._scale_y = h / self._BASE_H
+
+        # 根据 side view 摄像机参数计算技能/撤退按钮中心，并回退到默认值
+        self._retreat_x, self._retreat_y = self._compute_retreat_roi()
+        self._skill_x, self._skill_y = self._compute_skill_roi()
 
         # 录制状态
         self._recording = False
@@ -864,6 +874,33 @@ class ActionRecorder:
         )
         self._log(f"已保存整栏关键帧 {keyframe_id} ({roi_w}x{roi_h})")
 
+    @staticmethod
+    def _project_anchor_to_screen(
+        tile_calc, wx: float, wy: float, wz: float
+    ) -> Tuple[float, float]:
+        """把等效世界锚点通过 tile_calc 的 side view 投影矩阵投到屏幕坐标。"""
+        matrix = tile_calc._get_transform_matrix(side=True)
+        px, py, _, pw = np.dot(matrix, np.array([wx, wy, wz, 1.0]))
+        sx = (1 + px / pw) / 2 * tile_calc.screen_width
+        sy = (1 - py / pw) / 2 * tile_calc.screen_height
+        return sx, sy
+
+    def _compute_retreat_roi(self) -> Tuple[int, int]:
+        """根据 side view 摄像机参数计算撤退按钮 ROI 左上角坐标，失败则回退默认值。"""
+        try:
+            sx, sy = self._project_anchor_to_screen(self.tile_calc, *self._RETREAT_ANCHOR)
+            return int(round(sx - self._RETREAT_W / 2)), int(round(sy - self._RETREAT_H / 2))
+        except Exception:
+            return 1145, 510
+
+    def _compute_skill_roi(self) -> Tuple[int, int]:
+        """根据 side view 摄像机参数计算技能按钮 ROI 左上角坐标，失败则回退默认值。"""
+        try:
+            sx, sy = self._project_anchor_to_screen(self.tile_calc, *self._SKILL_ANCHOR)
+            return int(round(sx - self._SKILL_W / 2)), int(round(sy - self._SKILL_H / 2))
+        except Exception:
+            return 1615, 885
+
     def _in_fixed_roi(self, win_x: int, win_y: int, base_x: int, base_y: int,
                       w: int, h: int) -> bool:
         x1 = base_x * self._scale_x
@@ -1368,10 +1405,10 @@ class ActionRecorder:
 
             elif state == "UNIT_SELECTED":
                 in_retreat = self._in_fixed_roi(win_x, win_y,
-                                      self._RETREAT_X, self._RETREAT_Y,
+                                      self._retreat_x, self._retreat_y,
                                       self._RETREAT_W, self._RETREAT_H)
                 in_skill = self._in_fixed_roi(win_x, win_y,
-                                      self._SKILL_X, self._SKILL_Y,
+                                      self._skill_x, self._skill_y,
                                       self._SKILL_W, self._SKILL_H)
                 self._log(f" UNIT_SELECTED mouseUp in_retreat={in_retreat} in_skill={in_skill}")
                 if in_retreat:
