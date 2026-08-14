@@ -23,17 +23,145 @@ from models.raw_recording import RawRecording, RawAction, Keyframe, KeyframeType
 from models.script_schema import ScriptModel, ActionType, OperatorAction
 
 
-class _NoResetTimerWrapper:
-    """包装 RegionStateTimer，阻止 ScriptExecutor 在运行结束后 reset 计时器。"""
+class _ScriptTimerWrapper:
+    """在装载脚本执行期间替代 RegionStateTimer，以固定倍率连续推进。
 
-    def __init__(self, timer: RegionStateTimer):
+    RegionStateTimer 依赖视觉倍率采样，在每次 pause/resume 后需要若干 tick
+    才能重新稳定到 2x，导致计时器滞后于实际游戏时间。本包装器以固定 2x
+    倍率根据 wall-clock 推进，只在 executor 调用 pause/resume 时切换状态，
+    从而消除滞后。脚本结束后再把底层 RegionStateTimer 对齐到本包装器的
+    elapsed 时间，保证用户可以继续录制而不会出现时间跳变。
+    """
+
+    def __init__(self, timer: RegionStateTimer, rate: float = constants.FAST2X_RATE, debug: bool = False):
         self._timer = timer
+        self._rate = rate
+        self._debug = debug
+        self._base_elapsed = 0.0
+        self._accumulated = 0.0
+        self._running = False
+        self._paused = True
+        self._last_resume_time = 0.0
+
+    def sync_start(self, cost_sync=None):
+        """从底层计时器读取当前时间，并用费用条修正初始相位，然后开始固定倍率推进。"""
+        self._base_elapsed = self._timer.get_elapsed_ms()
+        self._accumulated = 0.0
+        self._running = True
+        self._paused = False
+        self._last_resume_time = time.perf_counter()
+        if self._debug:
+            self._log(f"同步启动 base={self._base_elapsed:.1f}ms rate={self._rate}x")
+        if cost_sync is not None:
+            self._calibrate_to_cost_bar(cost_sync)
+
+    def _calibrate_to_cost_bar(self, cost_sync):
+        """用费用条当前帧相位修正包装器的初始时间，只修正当前周期内的相位差。
+
+        包装器在启动时的滞后通常远小于一个费用条周期，因此底层计时器的
+        cycle_index 基本正确；这里只把相位对齐到费用条当前帧，避免跨周期
+        误判导致越修越偏。
+        """
+        try:
+            roi_gray = cost_sync.capture_roi_gray()
+            if roi_gray is None:
+                return
+            count = int(np.sum(roi_gray > cost_sync.threshold))
+            elapsed = self.get_elapsed_ms()
+            cost_frame = cost_sync.current_frame(count, elapsed)
+            if cost_frame is None:
+                return
+            cal = cost_sync.get_calibration(elapsed)
+            frame_duration = cal.frame_duration_ms
+            cycle_duration = cal.cycle_duration_ms()
+            offset = cost_sync.frame_offset_ms
+            adjusted = max(0.0, elapsed - offset)
+            cycle_index = int(adjusted / cycle_duration)
+            desired_phase = cost_frame * frame_duration
+            corrected = cycle_index * cycle_duration + desired_phase + offset
+            diff = corrected - elapsed
+            if abs(diff) <= constants.COST_BAR_SYNC_MAX_DIFF_MS:
+                self.adjust(diff)
+                if self._debug:
+                    self._log(
+                        f"费用条初始修正 {diff:+.1f}ms -> {self.get_elapsed_ms():.1f}ms "
+                        f"(frame={cost_frame}, cycle={cycle_index})"
+                    )
+            elif self._debug:
+                self._log(f"费用条初始修正差值 {diff:.1f}ms 超过阈值，跳过")
+        except Exception as e:
+            if self._debug:
+                self._log(f"费用条初始修正异常: {e}")
+
+    def sync_underlying(self):
+        """脚本结束后把底层计时器对齐到本包装器的 elapsed 时间。"""
+        # 先冻结包装器，避免对齐期间把用户接管/暂停的等待时间也计入
+        self.pause()
+        target = self.get_elapsed_ms()
+        current = self._timer.get_elapsed_ms()
+        diff = target - current
+        if abs(diff) > 0.5:
+            self._timer.adjust(diff)
+            if self._debug:
+                self._log(f"同步底层计时器 {current:.1f}ms -> {target:.1f}ms ({diff:+.1f}ms)")
+        elif self._debug:
+            self._log(f"同步底层计时器 无需调整 current={current:.1f}ms target={target:.1f}ms")
+
+        # 重置底层 tick 基准，丢弃脚本期间残留的切换事件，避免接管后时间翻倍
+        try:
+            self._timer.reset_tick_baseline(paused=True)
+            if self._debug:
+                self._log("tick 基准已重置")
+        except Exception:
+            pass
+
+    def get_elapsed_ms(self) -> float:
+        if self._running and not self._paused:
+            delta_ms = (time.perf_counter() - self._last_resume_time) * 1000.0 * self._rate
+            return self._base_elapsed + self._accumulated + delta_ms
+        return self._base_elapsed + self._accumulated
+
+    def pause(self):
+        if not self._paused:
+            now = time.perf_counter()
+            self._accumulated += (now - self._last_resume_time) * 1000.0 * self._rate
+            self._paused = True
+            # 同步到底层计时器，避免 matchstick shield 期间错过模拟的空格键
+            try:
+                self._timer.pause()
+            except Exception:
+                pass
+            if self._debug:
+                self._log(f"pause elapsed={self.get_elapsed_ms():.1f}ms")
+
+    def resume(self):
+        if self._paused:
+            self._paused = False
+            self._last_resume_time = time.perf_counter()
+            self._running = True
+            # 同步到底层计时器，避免 matchstick shield 期间错过模拟的空格键
+            try:
+                self._timer.resume()
+            except Exception:
+                pass
+            if self._debug:
+                self._log(f"resume elapsed={self.get_elapsed_ms():.1f}ms")
+
+    def adjust(self, offset_ms: float):
+        self._accumulated += offset_ms
+        if self._debug:
+            self._log(f"adjust {offset_ms:+.1f}ms -> {self.get_elapsed_ms():.1f}ms")
+
+    def reset(self):
+        # 不允许 reset，否则脚本结束后无法保留准确时间用于同步底层计时器
+        if self._debug:
+            self._log("reset 被忽略")
+
+    def _log(self, message: str):
+        print(f"[脚本计时器] {message}")
 
     def __getattr__(self, name: str):
         return getattr(self._timer, name)
-
-    def reset(self):
-        pass
 
 
 class ActionRecorder:
@@ -106,6 +234,7 @@ class ActionRecorder:
         debug_cost_bar: bool = False,
         debug_resolver: bool = False,
         debug_screenshot: bool = False,
+        debug_loaded_script: bool = False,
         initial_operator_count: int = 0,
         initial_item_count: int = 0,
         support_count: int = 0,
@@ -124,10 +253,12 @@ class ActionRecorder:
         # debug_cost_bar: RegionStateTimer 费用条检测日志
         # debug_resolver: OfflineResolver 离线识别日志
         # debug_screenshot: DEPLOY/RETREAT/SKILL 调试截图
+        # debug_loaded_script: 装载脚本执行日志
         self.debug = debug
         self.debug_cost_bar = debug_cost_bar
         self.debug_resolver = debug_resolver
         self.debug_screenshot = debug_screenshot
+        self.debug_loaded_script = debug_loaded_script or debug
         self._pause_key = pause_key
         self._matchstick_hotkeys = matchstick_hotkeys
         self._cost_bar_calibration_name = cost_bar_calibration_name
@@ -203,6 +334,9 @@ class ActionRecorder:
         self._mouse_down_pos: Optional[Tuple[int, int]] = None
         self._mouse_down_time: Optional[float] = None
         self._selected_unit_grid: Optional[Tuple[int, int]] = None
+        self._pending_skill_grid: Optional[Tuple[int, int]] = None
+        self._pending_skill_first_ms: Optional[int] = None
+        self._pending_skill_last_ms: Optional[int] = None
         self._timeout_timer: Optional[threading.Timer] = None
 
         # 场上当前占用格子的追踪（用于选中干员），不记录具体名称
@@ -308,6 +442,18 @@ class ActionRecorder:
                 time.sleep(0.01)
             if self._pending_bar_captures:
                 self._log(f"警告: 仍有 {len(self._pending_bar_captures)} 个部署栏截图未完成")
+
+        # 兜底：停止时若仍有预输入的技能，按最后一次有效时间落盘
+        if self._pending_skill_grid is not None and self._pending_skill_last_ms is not None:
+            self._log(
+                f"stop() 兜底落盘技能 grid={self._pending_skill_grid} "
+                f"time_ms={self._pending_skill_last_ms}ms"
+            )
+            self._record_raw_skill(self._pending_skill_grid, self._pending_skill_last_ms)
+            self._pending_skill_grid = None
+            self._pending_skill_first_ms = None
+            self._pending_skill_last_ms = None
+
         self._log(f"停止录制，共录制 {len(self._raw_actions)} 个原始操作")
         return self._resolve_recording()
 
@@ -346,6 +492,13 @@ class ActionRecorder:
                     f.write(line + "\n")
             except Exception:
                 pass
+
+    def _log_pending_skill(self, prefix: str):
+        """调试：打印当前技能预输入状态。"""
+        self._log(
+            f"{prefix} pending_skill_grid={self._pending_skill_grid} "
+            f"first={self._pending_skill_first_ms} last={self._pending_skill_last_ms}"
+        )
 
     def _save_image(self, image: np.ndarray, filename: str, png_compression: int = 1) -> Path:
         path = self._keyframes_dir / filename
@@ -924,11 +1077,19 @@ class ActionRecorder:
         self._timeout_timer.start()
 
     def _reset_state(self):
+        if self._pending_skill_grid is not None:
+            self._log(
+                f"_reset_state 丢弃未落盘的技能预输入 "
+                f"grid={self._pending_skill_grid} last={self._pending_skill_last_ms}ms"
+            )
         self._log(f"_reset_state 从 {self._state} 重置为 IDLE")
         with self._lock:
             self._state = "IDLE"
             self._pending = None
             self._selected_unit_grid = None
+            self._pending_skill_grid = None
+            self._pending_skill_first_ms = None
+            self._pending_skill_last_ms = None
             self._cancel_timeout()
 
     def _wait_for_timer_start(self):
@@ -1016,8 +1177,9 @@ class ActionRecorder:
     def _execute_loaded_script(self):
         """执行预装载脚本 A；执行完毕或用户接管后暂停并切换到录制模式。
 
-        复用 main.py 的二倍数凸图逻辑：在费用条开始运动后暂停、校准、
-        把当前时间之后的 action 时间压缩一半、切二倍速、恢复，再执行脚本。
+        使用固定 2x 的 _ScriptTimerWrapper 代替 RegionStateTimer 作为执行器
+        计时器，避免视觉倍率检测滞后导致动作时间漂移。脚本结束后再把包装器
+        时间同步回底层 RegionStateTimer，保证用户可以继续录制。
         """
         if self.loaded_script is None:
             return
@@ -1030,6 +1192,13 @@ class ActionRecorder:
         if self._on_takeover_callback is not None:
             self._on_takeover_callback(True)
 
+        # 脚本执行期间由包装器直接同步底层计时器状态；
+        # 先注销 RegionStateTimer 自己的键盘监听器，避免模拟空格键与监听器竞争
+        try:
+            self.timer._unregister_hotkey()
+        except Exception as e:
+            self._log(f"注销计时器键盘监听器异常: {e}")
+
         # 复制脚本，移除开头 time_ms==0 的倍率切换动作，避免后续强制 2x 后重复切换
         script_to_run = self.loaded_script.model_copy(deep=True)
         script_to_run.actions = [
@@ -1037,9 +1206,13 @@ class ActionRecorder:
             if not (a.time_ms == 0 and a.action in (ActionType.SPEED_UP, ActionType.SPEED_DOWN))
         ]
 
-        # 创建 ScriptExecutor，使用不会 reset 的计时器包装
-        executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug)
-        executor.timer = _NoResetTimerWrapper(self.timer)
+        # 创建 ScriptExecutor，使用固定倍率计时器包装器，避免 RegionStateTimer
+        # 在 pause/resume 后倍率检测滞后导致的时间漂移。
+        wrapper = _ScriptTimerWrapper(
+            self.timer, rate=constants.FAST2X_RATE, debug=self.debug_loaded_script
+        )
+        executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug_loaded_script)
+        executor.timer = wrapper
 
         # 费用条同步
         if self._cost_bar_calibration_name:
@@ -1056,16 +1229,24 @@ class ActionRecorder:
             )
         executor.set_cost_sync(cost_sync)
 
-        # 先加载原始脚本，用于初始校准
-        executor.load_script(script_to_run)
+        # 先加载原始脚本，用于初始校准；同步助战标记，保证部署栏排序与点击位置正确
+        borrow_support = self.support_count > 0
+        executor.load_script(script_to_run, borrow_support=borrow_support)
+        # 录制器的 RegionStateTimer 已经按游戏倍率返回缩放后的游戏时间，
+        # 不需要 executor 再用 _speed2x_ref_ms 做转换。
+        executor.set_timer_returns_game_time(True)
+        # 保留 executor 内部的暂停后费用条重同步：包装器虽然消除了倍率检测滞后，
+        # 但仍会被 pause/resume 的按键延迟带偏，需要费用条把每个动作后拉回来。
 
         # ---- 二倍速启动 ----
-        # 进入本函数时游戏已由 _wait_for_timer_start 暂停，稍作稳定后校准
-        self._log("游戏已暂停，准备切换二倍速...")
+        # 进入本函数时游戏已由 _wait_for_timer_start 暂停，稍作稳定后直接读取当前时间。
+        # 装载脚本模式下计时器已通过费用条启动检测启动，不再用 calibrate_timer_at_pause
+        # 做帧级校准，避免费用条周期歧义导致初始漂移。
+        self._log("游戏已暂停，读取计时器当前点...")
         time.sleep(1.0)
 
-        current_ms = executor.calibrate_timer_at_pause()
-        self._log(f"计时器校准点 current_ms={current_ms:.1f}")
+        current_ms = self.timer.get_elapsed_ms()
+        self._log(f"计时器当前点 current_ms={current_ms:.1f}")
 
         # RegionStateTimer 已按游戏倍率缩放时间，因此不需要像 main.py 那样压缩动作时间；
         # 只需把游戏切到二倍速，executor 直接按原始 time_ms 等待即可。
@@ -1074,10 +1255,15 @@ class ActionRecorder:
 
         self._log("恢复游戏，开始执行脚本...")
         action.press_key(self._pause_key)
+        # 监听器已注销，直接手动恢复底层计时器
+        self.timer.resume()
         deadline = time.perf_counter() + 1.0
         while time.perf_counter() < deadline and self.timer.is_manual_paused():
             time.sleep(0.01)
         time.sleep(0.1)
+
+        # 与包装器同步启动时间点，此后 executor.wait_until 使用固定 2x 推进
+        wrapper.sync_start(cost_sync=cost_sync)
 
         # 在独立事件循环中执行，同时轮询接管请求
         loop = asyncio.new_event_loop()
@@ -1086,6 +1272,8 @@ class ActionRecorder:
             loop.run_until_complete(self._run_executor_with_takeover(executor))
         finally:
             loop.close()
+            # 脚本结束后把底层 RegionStateTimer 对齐回包装器时间，以便继续录制
+            wrapper.sync_underlying()
 
         # 脚本已执行完毕或被接管，进入过渡状态：同步场上/部署栏状态、
         # 导出当前部署区的实际名称与数量给离线解析器，给用户明确的等待提示。
@@ -1119,6 +1307,8 @@ class ActionRecorder:
 
         # 暂停游戏，切换到用户录制
         action.press_key(self._pause_key)
+        # 监听器已注销，直接手动暂停底层计时器
+        self.timer.pause()
         deadline = time.perf_counter() + 1.0
         while time.perf_counter() < deadline and not self.timer.is_manual_paused():
             time.sleep(0.01)
@@ -1129,8 +1319,8 @@ class ActionRecorder:
                 a.model_copy(deep=True) for a in script_to_run.actions
             ]
         else:
-            # 接管时只保留已经执行完的部分：当前计时器时间之前的操作
-            current_ms = self.timer.get_elapsed_ms()
+            # 接管时只保留已经执行完的部分：使用包装器时间更准确地判断
+            current_ms = wrapper.get_elapsed_ms()
             self._executed_actions = [
                 a.model_copy(deep=True)
                 for a in script_to_run.actions
@@ -1140,6 +1330,12 @@ class ActionRecorder:
         # 通知 UI 恢复录制按钮
         if self._on_takeover_callback is not None:
             self._on_takeover_callback(False)
+
+        # 恢复 RegionStateTimer 的键盘监听器，以便用户继续录制时暂停键生效
+        try:
+            self.timer.reconnect_hotkey()
+        except Exception as e:
+            self._log(f"重连计时器键盘监听器异常: {e}")
 
         self._log(
             f"预装载脚本执行结束，已执行 {len(self._executed_actions)} 个操作，"
@@ -1291,8 +1487,19 @@ class ActionRecorder:
             elif state == "UNIT_SELECTED":
                 # 选中干员后，如果用户又回到部署栏点干员，说明要取消当前选中并部署新干员。
                 # 这里在 mouseDown 就切换，避免 mouseUp 时被当作“点击空地”丢弃。
+                # 切换前若存在技能预输入，先把最后一次有效技能时间落盘。
                 bar_idx = self._bar_index_at(win_x, win_y)
                 if bar_idx is not None:
+                    if self._pending_skill_grid is not None:
+                        self._log(
+                            f"UNIT_SELECTED 时在部署区 mouseDown，"
+                            f"先落盘技能 grid={self._pending_skill_grid} "
+                            f"time_ms={self._pending_skill_last_ms}ms"
+                        )
+                        self._record_raw_skill(self._pending_skill_grid, self._pending_skill_last_ms)
+                        self._pending_skill_grid = None
+                        self._pending_skill_first_ms = None
+                        self._pending_skill_last_ms = None
                     self._log(
                         f"UNIT_SELECTED 时在部署区 mouseDown (slot[{bar_idx}])，"
                         f"取消当前选中并开始新部署"
@@ -1410,17 +1617,74 @@ class ActionRecorder:
                 in_skill = self._in_fixed_roi(win_x, win_y,
                                       self._skill_x, self._skill_y,
                                       self._SKILL_W, self._SKILL_H)
-                self._log(f" UNIT_SELECTED mouseUp in_retreat={in_retreat} in_skill={in_skill}")
+                self._log(
+                    f" UNIT_SELECTED mouseUp in_retreat={in_retreat} in_skill={in_skill} "
+                    f"pos=({win_x:.0f},{win_y:.0f})"
+                )
+                self._log_pending_skill("UNIT_SELECTED入口")
                 if in_retreat:
+                    # 撤退优先，清空可能存在的技能预输入
+                    self._log(" 命中撤退ROI，清空技能预输入并记录RETREAT")
+                    self._pending_skill_grid = None
+                    self._pending_skill_first_ms = None
+                    self._pending_skill_last_ms = None
                     self._record_raw_retreat(self._selected_unit_grid, int(self._now_ms()))
                     self._reset_state()
                     return
                 if in_skill:
-                    self._record_raw_skill(self._selected_unit_grid, int(self._now_ms()))
-                    self._reset_state()
+                    # 已有技能预输入时，若落点命中另一名已部署干员，视为 normal 视角下误选新干员，
+                    # 用最后一次有效技能时间落盘并切换选中；否则继续累积技能预输入时间。
+                    hit_grid = self._field_unit_hit(win_x, win_y)
+                    self._log(f" 技能ROI内 hit_grid={hit_grid} selected={self._selected_unit_grid}")
+                    if (
+                        self._pending_skill_grid is not None
+                        and hit_grid is not None
+                        and hit_grid != self._selected_unit_grid
+                    ):
+                        self._log(
+                            f" 技能ROI内命中其他干员 {hit_grid}，"
+                            f"使用最后一次有效技能时间 {self._pending_skill_last_ms}ms"
+                        )
+                        self._record_raw_skill(self._pending_skill_grid, self._pending_skill_last_ms)
+                        self._pending_skill_grid = None
+                        self._pending_skill_first_ms = None
+                        self._pending_skill_last_ms = None
+                        with self._lock:
+                            self._state = "UNIT_SELECTED"
+                            self._selected_unit_grid = hit_grid
+                        self._log(f"选中单位 @ {hit_grid} (技能ROI内命中)")
+                        return
+                    now_ms = int(self._now_ms())
+                    if self._pending_skill_grid is None:
+                        self._pending_skill_grid = self._selected_unit_grid
+                        self._pending_skill_first_ms = now_ms
+                    self._pending_skill_last_ms = now_ms
+                    self._log(f" 技能ROI内点击，更新预输入时间 {now_ms}ms")
+                    self._log_pending_skill("技能ROI点击后")
                     return
-                self._log("UNIT_SELECTED 点击空地，丢弃")
-                self._reset_state()
+
+                # 技能/撤退 ROI 外：有预输入技能则落盘，再视落点决定是否选中新干员
+                hit_grid = self._field_unit_hit(win_x, win_y)
+                self._log(f" ROI外 hit_grid={hit_grid} selected={self._selected_unit_grid}")
+                if self._pending_skill_grid is not None:
+                    self._log(
+                        f" ROI外点击，落盘技能 grid={self._pending_skill_grid} "
+                        f"time_ms={self._pending_skill_last_ms}ms"
+                    )
+                    self._record_raw_skill(self._pending_skill_grid, self._pending_skill_last_ms)
+                    self._pending_skill_grid = None
+                    self._pending_skill_first_ms = None
+                    self._pending_skill_last_ms = None
+                else:
+                    self._log("UNIT_SELECTED 点击空地/其他，丢弃")
+
+                if hit_grid is not None and hit_grid != self._selected_unit_grid:
+                    with self._lock:
+                        self._state = "UNIT_SELECTED"
+                        self._selected_unit_grid = hit_grid
+                    self._log(f"选中单位 @ {hit_grid} (ROI外命中)")
+                else:
+                    self._reset_state()
 
             elif state == "IDLE":
                 hit = self._field_unit_hit(win_x, win_y)
@@ -1495,10 +1759,13 @@ class ActionRecorder:
                 self._record_raw_retreat(self._selected_unit_grid, int(self._now_ms()))
                 self._reset_state()
             elif char and char.lower() == action.skill_key():
-                self._log(f" {action.skill_key().upper()}键技能 {self._selected_unit_grid}")
-                self._cancel_timeout()
-                self._record_raw_skill(self._selected_unit_grid, int(self._now_ms()))
-                self._reset_state()
+                now_ms = int(self._now_ms())
+                if self._pending_skill_grid is None:
+                    self._pending_skill_grid = self._selected_unit_grid
+                    self._pending_skill_first_ms = now_ms
+                self._pending_skill_last_ms = now_ms
+                self._log(f" {action.skill_key().upper()}键技能预输入 {self._selected_unit_grid} time_ms={now_ms}")
+                self._log_pending_skill("按E后")
 
     # ------------------------------------------------------------------
     # 超时回调

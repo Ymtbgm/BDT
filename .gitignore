@@ -98,3 +98,6 @@ YOLO/
 # 个人笔记 / 中间文档
 time_state.md
 deploy_guide_thick7.md
+
+# 游戏数据（体积大，由用户本地维护）
+resource/game_data/levels.json

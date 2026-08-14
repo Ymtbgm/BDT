@@ -112,6 +112,7 @@ class RecorderTab(QWidget):
         self.main_window.combo_rec_debug.add_item("费用条检测", "cost_bar")
         self.main_window.combo_rec_debug.add_item("离线识别", "resolver")
         self.main_window.combo_rec_debug.add_item("调试截图", "screenshot")
+        self.main_window.combo_rec_debug.add_item("脚本装载执行", "loaded_script")
         self.main_window.combo_rec_debug.setToolTip(
             "勾选需要打印日志或保存截图的调试项，可多选。"
         )
@@ -392,6 +393,7 @@ class RecorderTab(QWidget):
         rec_debug_cost_bar = "cost_bar" in debug_keys
         rec_debug_resolver = "resolver" in debug_keys
         rec_debug_screenshot = "screenshot" in debug_keys
+        rec_debug_loaded_script = "loaded_script" in debug_keys
 
         self._normal_overlay_started = False
         self._recorder_overlay_timer_mode = False
@@ -436,6 +438,7 @@ class RecorderTab(QWidget):
             debug_cost_bar=rec_debug_cost_bar,
             debug_resolver=rec_debug_resolver,
             debug_screenshot=rec_debug_screenshot,
+            debug_loaded_script=rec_debug_loaded_script,
             initial_operator_count=initial_operator_count,
             initial_item_count=initial_item_count,
             support_count=support_count,
@@ -601,12 +604,12 @@ class RecorderTab(QWidget):
         self.main_window.rec_status.setText("状态: 悬浮窗已关闭")
 
     def _auto_save_script(self, script, stage_code: str, loaded_script_path: str = "") -> Path:
-        """自动保存脚本到 scripts/ 目录，序号递增避免覆盖。
+        """自动保存脚本到 scripts/<stage_code>/ 目录，序号递增避免覆盖。
 
         当存在装载脚本时，保存为 <原脚本名>_new_001.json；
         否则按关卡代号保存为 <stage_code>_001.json。
         """
-        scripts_dir = get_project_root() / "scripts"
+        scripts_dir = get_project_root() / "scripts" / stage_code
         scripts_dir.mkdir(parents=True, exist_ok=True)
 
         if loaded_script_path:
@@ -723,8 +726,11 @@ class RecorderTab(QWidget):
     def _save_recording(self):
         if not hasattr(self.main_window, "_last_recorded_script") or self.main_window._last_recorded_script is None:
             return
+        stage_code = getattr(self.main_window._last_recorded_script, "stage_code", "") or ""
+        default_dir = get_project_root() / "scripts" / stage_code
+        default_dir.mkdir(parents=True, exist_ok=True)
         path, _ = QFileDialog.getSaveFileName(
-            self.main_window, "保存录制脚本", "", "JSON 文件 (*.json)"
+            self.main_window, "保存录制脚本", str(default_dir), "JSON 文件 (*.json)"
         )
         if not path:
             return

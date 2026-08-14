@@ -180,6 +180,11 @@ SQUAD_AVATAR_ROI_RATIOS: List[Tuple[float, float, float, float]] = [
 # 最左三列（第 0-2 列）的 RETREAT/SKILL 操作提前触发时间
 LEFT_COLS_ADVANCE_MS: int = 18
 
+# 装载脚本模式下，最左三列 RETREAT/SKILL 的额外提前量。
+# 此时计时器直接返回游戏时间，2x 下同样的现实延迟对应双倍游戏时间，
+# 因此需要比 standalone 执行器的 18ms 更大。
+LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS: int = 45
+
 # _execute_cluster 中推进一帧的计时器补偿
 ADVANCE_FRAME_MS: float = 33.0
 
@@ -189,6 +194,10 @@ WAIT_SPIN_THRESHOLD_MS: int = 5
 # 二倍速下 wait_until 目标提前量（压缩时间 ms），用于抵消暂停键延迟导致的触发偏晚
 # 设为 0 表示默认不提前；若实测二倍速仍偏晚，可适量调大
 TWOX_EARLY_TRIGGER_MS: int = 0
+
+# 装载脚本模式下（RegionStateTimer 已返回缩放游戏时间）的 wait_until 提前量，
+# 用于抵消空格键到游戏真正暂停的延迟。按帧估算：30fps 下约 1 帧 33ms。
+LOADED_SCRIPT_EARLY_TRIGGER_MS: int = 30
 
 # ============================================================
 # 键位与热键 (action.py 默认配置)

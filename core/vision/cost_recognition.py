@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -8,6 +8,9 @@ import numpy as np
 from core.capture.capture import WindowCapture
 from core.vision.ocr_engine import OCREngine
 import core.base.constants as constants
+
+if TYPE_CHECKING:
+    from core.vision.digit_recognizer import DigitRecognizer
 
 
 def recognize_operator_costs(
@@ -18,6 +21,7 @@ def recognize_operator_costs(
     support_count: int = 0,
     direct_start: bool = False,
     debug: bool = False,
+    digit_recognizer: Optional["DigitRecognizer"] = None,
 ) -> Tuple[Dict[str, int], bool]:
     """按部署栏格子精确裁剪并 OCR 识别干员费用。
 
@@ -51,6 +55,7 @@ def recognize_operator_costs(
         )
 
     mapping = {}
+    use_digit = digit_recognizer is not None and getattr(digit_recognizer, "available", False)
     for i, name in enumerate(operators_to_recognize):
         bar_index = total - 1 - i
         cx = w - cell_w * (bar_index + 0.5)
@@ -70,36 +75,58 @@ def recognize_operator_costs(
         fixed_img = preprocess_cost_image(img)
         inv_img = preprocess_cost_image_inv(img)
 
-        fixed_result = extract_cost_with_conf(
-            ocr.recognize(fixed_img, min_confidence=0.5), min_conf=0.5
-        )
-        inv_result = extract_cost_with_conf(
-            ocr.recognize(inv_img, min_confidence=0.5), min_conf=0.5
-        )
-
         if debug:
             os.makedirs(session_dir, exist_ok=True)
             cv2.imwrite(raw_path, img)
             cv2.imwrite(fixed_path, fixed_img)
             cv2.imwrite(inv_path, inv_img)
-            fixed_str = f"{fixed_result[0]}({fixed_result[1]:.2f})" if fixed_result else "失败"
-            inv_str = f"{inv_result[0]}({inv_result[1]:.2f})" if inv_result else "失败"
 
         chosen = None
         chosen_source = None
-        if fixed_result:
-            chosen = fixed_result[0]
-            chosen_source = "固定阈值"
-        elif inv_result:
-            chosen = inv_result[0]
-            chosen_source = "反色"
+
+        # 1) 优先使用 ONNX 数字模型（黑字白底）
+        if use_digit:
+            try:
+                model_result = digit_recognizer.predict_cost(inv_img)
+                if model_result:
+                    value, conf = model_result
+                    if 0 <= value <= 99:
+                        chosen = value
+                        chosen_source = "数字模型"
+                        if debug:
+                            print(f"[部署栏OCR] {name}: 数字模型={value} (conf={conf:.2f})")
+            except Exception as e:
+                if debug:
+                    print(f"[部署栏OCR] {name}: 数字模型异常: {e}")
+
+        # 2) 数字模型失败则 fallback 到 OCR 双路
+        if chosen is None:
+            fixed_result = extract_cost_with_conf(
+                ocr.recognize(fixed_img, min_confidence=0.5), min_conf=0.5
+            )
+            inv_result = extract_cost_with_conf(
+                ocr.recognize(inv_img, min_confidence=0.5), min_conf=0.5
+            )
+
+            if debug:
+                fixed_str = f"{fixed_result[0]}({fixed_result[1]:.2f})" if fixed_result else "失败"
+                inv_str = f"{inv_result[0]}({inv_result[1]:.2f})" if inv_result else "失败"
+
+            if fixed_result:
+                chosen = fixed_result[0]
+                chosen_source = "固定阈值"
+            elif inv_result:
+                chosen = inv_result[0]
+                chosen_source = "反色"
+
+            if debug:
+                if chosen is not None:
+                    print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → {chosen} ({chosen_source})")
+                else:
+                    print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → 失败")
 
         if chosen is not None:
             mapping[name] = chosen
-            if debug:
-                print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → {chosen} ({chosen_source})")
-        elif debug:
-            print(f"[部署栏OCR] {name}: 固定阈值={fixed_str}, 反色={inv_str} → 失败")
 
     expected = len(operators_to_recognize)
     if len(mapping) < expected:

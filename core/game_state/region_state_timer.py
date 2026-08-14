@@ -529,6 +529,24 @@ class RegionStateTimer:
         if self.debug:
             print(f"[区域计时] 手动调整 {offset_ms:+.1f}ms，当前时间 {self._scaled_elapsed_ms:.1f}ms")
 
+    def reset_tick_baseline(self, paused: bool = True):
+        """重置 tick 基准并清空切换事件队列。
+
+        外部包装器在脚本执行期间替代本计时器推进时间，脚本结束后再把
+        _scaled_elapsed_ms 对齐回目标值。此时必须丢弃脚本期间遗留的切换事件，
+        并把 _last_tick_time 设为当前时刻，否则接管后 tick() 会把旧区间
+        重新累加，导致时间跳跃/翻倍。
+        """
+        with self._lock:
+            self._last_tick_time = time.perf_counter()
+            self._toggle_events.clear()
+            self._paused = paused
+            self._prev_paused = paused
+            self._last_toggle_time = None
+        if self.debug:
+            state_text = "暂停" if paused else "运行"
+            print(f"[区域计时] tick 基准已重置为 {state_text}，清空切换事件")
+
     def shield_matchstick(self, duration_ms: float = 500.0):
         """外部请求进入划火柴保护期（如脚本子进程即将执行 P+ESC 组合）。"""
         now = time.perf_counter()

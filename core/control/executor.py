@@ -12,6 +12,7 @@ from core.capture.capture import WindowCapture
 from core.map.grid_mapper import GridMapper
 from core.game_state.timer import StageTimer
 from core.vision.ocr_engine import OCREngine
+from core.vision.digit_recognizer import DigitRecognizer
 from core.game_state.operator_pool import OperatorPool
 from core.game_state.cost_bar_sync import CostBarSync
 from core.game_state.cost_bar_sync_cc import CostBarSyncCC
@@ -44,7 +45,10 @@ class ScriptExecutor:
         self._costs_recognized = False
         self._cost_bar_maxed = False
         self._speed2x_ref_ms: Optional[int] = None
+        self._timer_returns_game_time: bool = False
+        self._disable_resync_at_pause: bool = False
         self._summon_bindings_map: Dict[str, str] = {}
+        self.digit_recognizer: Optional[DigitRecognizer] = None
 
     def set_cost_sync(self, cost_sync: Optional[CostBarSyncType]):
         self.cost_sync = cost_sync
@@ -53,8 +57,21 @@ class ScriptExecutor:
         """设置二倍速时间压缩的参考点，用于费用条同步时反推原始游戏内时间。"""
         self._speed2x_ref_ms = ref_ms
 
+    def set_timer_returns_game_time(self, scaled: bool = True):
+        """标记外部计时器已经返回缩放后的游戏内时间，不需要再乘倍率。"""
+        self._timer_returns_game_time = scaled
+
+    def set_disable_resync_at_pause(self, disabled: bool = True):
+        """禁用二倍速暂停后的费用条重同步，避免与精确计时器包装器冲突。"""
+        self._disable_resync_at_pause = disabled
+
     def _game_time_ms(self, time_ms: int) -> int:
-        """将压缩后的现实时间还原为原始游戏内时间，供费用条帧同步使用。"""
+        """将压缩后的现实时间还原为原始游戏内时间，供费用条帧同步使用。
+
+        如果外部计时器已经返回缩放后的游戏时间，则直接返回。
+        """
+        if self._timer_returns_game_time:
+            return time_ms
         if self._speed2x_ref_ms is not None and time_ms > self._speed2x_ref_ms:
             return self._speed2x_ref_ms + (time_ms - self._speed2x_ref_ms) * 2
         return time_ms
@@ -84,7 +101,13 @@ class ScriptExecutor:
         实际游戏时间，再把计时器修正为对应的压缩时间，防止误差累积。
         检测到费用条 MAX（费用已满）后，本局不再重同步。
         """
-        if self._speed2x_ref_ms is None or self.cost_sync is None:
+        if self._disable_resync_at_pause:
+            if self.debug:
+                print("[二倍速计时器重同步] 已禁用，跳过")
+            return
+        if self.cost_sync is None:
+            return
+        if not self._timer_returns_game_time and self._speed2x_ref_ms is None:
             return
         if self._cost_bar_maxed:
             return
@@ -106,8 +129,11 @@ class ScriptExecutor:
         actual_game_ms = self._estimate_game_time_at_count(count, compressed_time)
         if actual_game_ms is None:
             return
-        ref = self._speed2x_ref_ms
-        new_timer_ms = int(ref + (actual_game_ms - ref) / 2)
+        if self._timer_returns_game_time:
+            new_timer_ms = int(actual_game_ms)
+        else:
+            ref = self._speed2x_ref_ms
+            new_timer_ms = int(ref + (actual_game_ms - ref) / 2)
         old_timer_ms = self.timer.get_elapsed_ms()
         self.timer.adjust(new_timer_ms - old_timer_ms)
         if self.debug:
@@ -164,6 +190,7 @@ class ScriptExecutor:
         self.borrow_support = borrow_support
         self.direct_start = direct_start
         self._speed2x_ref_ms = None
+        self._timer_returns_game_time = False
         script.sort_actions()
         w, h = self.capture.get_window_size()
         self.grid = GridMapper(
@@ -212,7 +239,12 @@ class ScriptExecutor:
         if not grid and action.operator_name and not action.is_object:
             grid = self.pool.get_deployed_grid(action.operator_name)
         if grid and grid[1] in (0, 1, 2):
-            return max(0, action.time_ms - constants.LEFT_COLS_ADVANCE_MS)
+            advance = (
+                constants.LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS
+                if self._timer_returns_game_time
+                else constants.LEFT_COLS_ADVANCE_MS
+            )
+            return max(0, action.time_ms - advance)
         return action.time_ms
 
     def _wait_target_ms(self, target_ms: int, action: OperatorAction) -> int:
@@ -223,6 +255,8 @@ class ScriptExecutor:
             and target_ms > self._speed2x_ref_ms
         ):
             return max(self._speed2x_ref_ms, target_ms - constants.TWOX_EARLY_TRIGGER_MS)
+        if self._timer_returns_game_time:
+            return max(0, target_ms - constants.LOADED_SCRIPT_EARLY_TRIGGER_MS)
         return target_ms
 
     def _abs_pixel(self, row: int, col: int, side: bool = False):
@@ -251,6 +285,18 @@ class ScriptExecutor:
         """按干员格子精确裁剪并 OCR 识别费用，返回 (costs, manual_support_detected)。"""
         if not self.script or not self.script.operators:
             return {}, False
+
+        # 懒加载 ONNX 数字分类器，优先用于费用识别（与录制器/解析器保持一致）
+        if self.digit_recognizer is None:
+            try:
+                self.digit_recognizer = DigitRecognizer(use_gpu=True)
+                if self.debug:
+                    print(f"[DigitRecognizer] 已加载，可用={self.digit_recognizer.available}")
+            except Exception as e:
+                if self.debug:
+                    print(f"[DigitRecognizer] 加载失败，将仅使用 OCR: {e}")
+                self.digit_recognizer = None
+
         item_names = [it.name for it in (self.script.items or [])]
         return cost_recognition.recognize_operator_costs(
             capture=self.capture,
@@ -260,6 +306,7 @@ class ScriptExecutor:
             support_count=1 if getattr(self, "borrow_support", False) else 0,
             direct_start=self.direct_start,
             debug=self.debug,
+            digit_recognizer=self.digit_recognizer,
         )
 
     async def _advance_frame_in_bullet_time(self):
@@ -325,42 +372,41 @@ class ScriptExecutor:
             print(f"[费用条同步] 跳 1 帧后: 当前帧={current_frame}, 白像素={count}")
 
     async def _sync_to_frame_after_select(self, time_ms: int):
-        """在已选中干员（子弹时间）后进行帧同步，直接 p_and_esc_click 跳帧，不再进出子弹时间。"""
+        """在已选中干员（子弹时间）后进行帧同步，直接 p_and_esc_click 跳帧，最多跳 2 帧。"""
         if self.cost_sync is None:
             return
 
         game_time_ms = self._game_time_ms(time_ms)
         target_frame = self.cost_sync.target_frame_index(game_time_ms)
-        count = self.cost_sync.white_pixel_count()
-        if count is None:
-            return
-
-        current_frame = self.cost_sync.current_frame(count, game_time_ms)
-        distance = self.cost_sync.frame_distance(current_frame, target_frame)
-        if self.cost_sync.debug:
-            print(
-                f"[费用条同步-选中后] 目标帧={target_frame}, 当前帧={current_frame}, "
-                f"白像素={count}, 帧差={distance}"
-            )
-
-        if distance >= 2:
-            if self.cost_sync.debug:
-                print("[费用条同步-选中后] 帧差 >= 2，跳过同步直接执行")
-            return
-
         cycle = self.cost_sync.get_calibration(game_time_ms).cycle_length
-        if self.cost_sync.is_match(count, target_frame, game_time_ms) or self.cost_sync.is_match(
-            count, (target_frame + 1) % cycle, game_time_ms
-        ):
-            if self.cost_sync.debug:
-                print("[费用条同步-选中后] 已匹配目标帧/下一帧，直接执行")
-            return
 
-        self.action.p_and_esc_click()
-        count = self.cost_sync.white_pixel_count()
-        if self.cost_sync.debug:
+        for attempt in range(2):
+            count = self.cost_sync.white_pixel_count()
+            if count is None:
+                return
             current_frame = self.cost_sync.current_frame(count, game_time_ms)
-            print(f"[费用条同步-选中后] 跳 1 帧后: 当前帧={current_frame}, 白像素={count}")
+            distance = self.cost_sync.frame_distance(current_frame, target_frame)
+            if self.debug or self.cost_sync.debug:
+                print(
+                    f"[费用条同步-选中后] 目标帧={target_frame}, 当前帧={current_frame}, "
+                    f"白像素={count}, 帧差={distance}, 尝试={attempt}"
+                )
+
+            if distance > 2:
+                if self.debug or self.cost_sync.debug:
+                    print("[费用条同步-选中后] 帧差 > 2，跳过同步直接执行")
+                return
+
+            if self.cost_sync.is_match(count, target_frame, game_time_ms) or self.cost_sync.is_match(
+                count, (target_frame + 1) % cycle, game_time_ms
+            ):
+                if self.debug or self.cost_sync.debug:
+                    print("[费用条同步-选中后] 已匹配目标帧/下一帧，直接执行")
+                return
+
+            self.action.p_and_esc_click()
+            if self.debug or self.cost_sync.debug:
+                print("[费用条同步-选中后] 跳 1 帧")
 
     async def _execute_action_core(self, action: OperatorAction):
         """仅执行操作逻辑，不处理暂停/恢复外壳。"""
@@ -510,18 +556,27 @@ class ScriptExecutor:
         elif action.action == ActionType.PAUSE:
             self.action.press_key(self.action.pause_key())
 
+    def _fmt_time(self, time_ms: Optional[int] = None) -> str:
+        t = self.timer.get_elapsed_ms() if time_ms is None else time_ms
+        if self.cost_sync is None:
+            return f"timer={t:.1f}ms"
+        count = self.cost_sync.white_pixel_count()
+        if count is None:
+            return f"timer={t:.1f}ms"
+        game = self._estimate_game_time_at_count(count, t)
+        if game is None:
+            return f"timer={t:.1f}ms"
+        return f"timer={t:.1f}ms game≈{game:.1f}ms"
+
     async def _execute_action(self, action: OperatorAction):
         """单 action 执行，包含完整的暂停/恢复外壳。"""
         import pydirectinput
         if self.debug:
             print(f"[执行] time={self.timer.get_elapsed_ms()}ms, 目标={action.time_ms}ms, action={action.action.value} {action.operator_name}")
-            if self.cost_sync is not None:
-                count = self.cost_sync.white_pixel_count()
-                game_time_ms = self._game_time_ms(action.time_ms)
-                target_frame = self.cost_sync.target_frame_index(game_time_ms)
-                current_frame = self.cost_sync.current_frame(count, game_time_ms)
-                print(f"[执行帧校验] 目标帧={target_frame}, 当前帧={current_frame}, 白像素={count}")
         pause_key = self.action.pause_key()
+
+        if self.debug:
+            print(f"[动作计时] 开始暂停外壳: 目标={action.time_ms}ms, timer={self.timer.get_elapsed_ms():.1f}ms")
 
         # 临时诊断：测量按下暂停键期间游戏内时间前进了多少
         if self.debug and self.cost_sync is not None:
@@ -531,10 +586,21 @@ class ScriptExecutor:
         else:
             _game0 = None
 
+        # 关键：到达目标后立刻按下暂停，避免前面的截图/计算耗时让游戏继续跑
         pydirectinput.keyDown(pause_key)
         self.timer.pause()
         await asyncio.sleep(0.05)
         pydirectinput.keyUp(pause_key)
+
+        # 暂停后再做详细帧校验和 fmt_time，这些操作不再影响实际动作时机
+        if self.debug:
+            if self.cost_sync is not None:
+                count = self.cost_sync.white_pixel_count()
+                game_time_ms = self._game_time_ms(action.time_ms)
+                target_frame = self.cost_sync.target_frame_index(game_time_ms)
+                current_frame = self.cost_sync.current_frame(count, game_time_ms)
+                print(f"[执行帧校验] 目标帧={target_frame}, 当前帧={current_frame}, 白像素={count}")
+            print(f"[动作计时] 暂停后: 目标={action.time_ms}ms, {self._fmt_time()}")
 
         if self.debug and self.cost_sync is not None and _game0 is not None:
             _t1 = self.timer.get_elapsed_ms()
@@ -550,11 +616,17 @@ class ScriptExecutor:
 
         # 二倍速下根据费用条修正计时器，避免暂停延迟导致误差累积
         self._resync_timer_at_pause(action.time_ms)
+        if self.debug:
+            print(f"[动作计时] resync后: {self._fmt_time()}")
 
         await asyncio.sleep(1.0)
 
         try:
+            if self.debug:
+                print(f"[动作计时] 执行核心前: 目标={action.time_ms}ms, {self._fmt_time()}")
             await self._execute_action_core(action)
+            if self.debug:
+                print(f"[动作计时] 执行核心后: 目标={action.time_ms}ms, {self._fmt_time()}")
             if action.action == ActionType.PAUSE:
                 # PAUSE 把游戏从暂停切回运行，计时器同步恢复
                 self.timer.resume()
@@ -600,11 +672,14 @@ class ScriptExecutor:
         # 二倍速下根据费用条修正计时器，避免暂停延迟导致误差累积
         if batch:
             self._resync_timer_at_pause(batch[0].time_ms)
+        if self.debug:
+            print(f"[动作计时-批量] resync后: {self._fmt_time()}")
 
         await asyncio.sleep(1.0)
 
         try:
-            if self.debug and self.cost_sync is not None and batch:
+            if self.debug:
+                print(f"[动作计时-批量] 执行核心前: 目标={batch[0].time_ms}ms, {self._fmt_time()}")
                 action = batch[0]
                 count = self.cost_sync.white_pixel_count()
                 game_time_ms = self._game_time_ms(action.time_ms)
@@ -620,6 +695,8 @@ class ScriptExecutor:
                 # 同 batch 内操作之间留 1.0s 让游戏 UI 稳定，避免连续拖拽冲突
                 if idx < len(batch) - 1:
                     await asyncio.sleep(1.0)
+            if self.debug:
+                print(f"[动作计时-批量] 执行核心后: 目标={batch[0].time_ms}ms, {self._fmt_time()}")
         finally:
             await asyncio.sleep(1.0)
             pydirectinput.keyDown(pause_key)
@@ -692,11 +769,14 @@ class ScriptExecutor:
         # 二倍速下根据费用条修正计时器，避免暂停延迟导致误差累积
         if groups and groups[0]:
             self._resync_timer_at_pause(groups[0][0].time_ms)
+        if self.debug:
+            print(f"[动作计时-聚类] resync后: {self._fmt_time()}")
 
         await asyncio.sleep(1.0)
 
         try:
-            if self.debug and self.cost_sync is not None and groups and groups[0]:
+            if self.debug:
+                print(f"[动作计时-聚类] 执行核心前: 目标={groups[0][0].time_ms}ms, {self._fmt_time()}")
                 action = groups[0][0]
                 count = self.cost_sync.white_pixel_count()
                 game_time_ms = self._game_time_ms(action.time_ms)
@@ -723,6 +803,8 @@ class ScriptExecutor:
                     if pos0:
                         self.action.select_at(pos0[0], pos0[1])
                         await asyncio.sleep(1.0)
+            if self.debug:
+                print(f"[动作计时-聚类] 执行核心后: 目标={groups[0][0].time_ms}ms, {self._fmt_time()}")
         finally:
             await asyncio.sleep(1.0)
             pydirectinput.keyDown(pause_key)
@@ -745,6 +827,8 @@ class ScriptExecutor:
                     batch = payload
                     actual_target = self._get_actual_target(batch[0])
                     actual_target = self._wait_target_ms(actual_target, batch[0])
+                    if self.debug:
+                        print(f"[动作计时] 等待目标: 原始={batch[0].time_ms}ms 实际={actual_target}ms, {self._fmt_time()}")
                     ok = await self.wait_until(actual_target)
                     if not ok:
                         break
@@ -757,6 +841,8 @@ class ScriptExecutor:
                     groups = payload
                     actual_target = self._get_actual_target(groups[0][0])
                     actual_target = self._wait_target_ms(actual_target, groups[0][0])
+                    if self.debug:
+                        print(f"[动作计时] 等待目标(聚类): 原始={groups[0][0].time_ms}ms 实际={actual_target}ms, {self._fmt_time()}")
                     ok = await self.wait_until(actual_target)
                     if not ok:
                         break
