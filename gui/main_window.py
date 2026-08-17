@@ -259,9 +259,29 @@ class MainWindow(QMainWindow):
         return s, f
 
     def _ms_to_sf_for_timer(self, ms: float):
-        """计时器悬浮窗专用：使用 floor 取帧，避免初始/边界帧数多 1。"""
+        """计时器悬浮窗专用：使用 floor 取帧，避免初始/边界帧数多 1。
+
+        若当前存在费用条校准表，会按校准表的 frame_duration_ms 转换当前秒内
+        的帧号，以适配普通模式 10s 前后、危机合约 tag 等不同循环。
+        """
+        frame_duration = 33.333
+        cycle_length = 30
+        region_timer = getattr(self, "_region_timer", None)
+        if region_timer is not None:
+            cost_sync = getattr(region_timer, "cost_sync", None)
+            if cost_sync is not None and hasattr(cost_sync, "get_calibration"):
+                try:
+                    cal = cost_sync.get_calibration(ms)
+                    if cal is not None and cal.frame_duration_ms and cal.cycle_length:
+                        frame_duration = cal.frame_duration_ms
+                        cycle_length = cal.cycle_length
+                except Exception:
+                    pass
+
         s = int(ms) // 1000
-        f = min(29, max(0, int((ms % 1000) / 33.333)))
+        # 加极小 epsilon，避免费用条帧边界处的浮点误差把 frame 29 显示成 28
+        f = int((ms % 1000 + 1e-5) / frame_duration)
+        f = min(cycle_length - 1, max(0, f))
         return s, f
 
     def _sf_to_ms(self, s, f) -> int:

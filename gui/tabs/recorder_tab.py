@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QMessageBox, QFileDialog, QComboBox,
     QApplication, QInputDialog,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QMetaObject, Q_ARG, QThread
 
 import action
 from core.base.paths import get_project_root
@@ -453,6 +453,9 @@ class RecorderTab(QWidget):
         self.main_window._recorder.set_takeover_callback(
             lambda show: overlay.show_takeover_mode(show)
         )
+        self.main_window._recorder.set_timer_adjusted_callback(
+            self._on_executor_timer_adjusted
+        )
         self.main_window._recorder_overlay = overlay
         self._update_loaded_script_status()
         self.main_window._recorder.start()
@@ -492,7 +495,8 @@ class RecorderTab(QWidget):
             self._stop_recording()
             return
         overlay = getattr(self.main_window, "_recorder_overlay", None)
-        debug = "recorder" in set(self.main_window.combo_rec_debug.checked_data())
+        debug_keys = set(self.main_window.combo_rec_debug.checked_data())
+        debug = "recorder" in debug_keys or "loaded_script" in debug_keys
         if debug:
             print(f"[recorder_tab poll] state={state} started={getattr(self, '_normal_overlay_started', False)} timer_mode={getattr(self, '_recorder_overlay_timer_mode', False)} switch_at={getattr(self, '_recording_overlay_switch_at', 0):.3f} now={time.time():.3f}")
         if overlay is not None:
@@ -522,9 +526,11 @@ class RecorderTab(QWidget):
                         print("[recorder_tab poll] switch to timer")
                     self._switch_recorder_overlay_to_timer()
             elif state == "EXECUTING_LOADED_SCRIPT":
+                # 脚本执行阶段切换到计时显示，方便用户观察与调试
+                self._recorder_overlay_timer_mode = True
                 if debug:
-                    print("[recorder_tab poll] set_phase 脚本操作中...")
-                overlay.set_phase("脚本操作中...")
+                    print("[recorder_tab poll] switch to timer (loaded script)")
+                self._update_recorder_overlay_time(overlay)
             elif state == "TRANSITIONING_TO_TAKEOVER":
                 if debug:
                     print("[recorder_tab poll] set_phase 正在转为接管状态...")
@@ -540,27 +546,30 @@ class RecorderTab(QWidget):
 
     def _switch_recorder_overlay_to_timer(self):
         """录制提示 5 秒后切换为计时显示。"""
-        debug = "recorder" in set(self.main_window.combo_rec_debug.checked_data())
+        debug_keys = set(self.main_window.combo_rec_debug.checked_data())
+        debug = "recorder" in debug_keys or "loaded_script" in debug_keys
         overlay = getattr(self.main_window, "_recorder_overlay", None)
         if debug:
             print(f"[_switch_recorder_overlay_to_timer] overlay={overlay}")
         if overlay is None:
             return
         self._recorder_overlay_timer_mode = True
-        timer = self.main_window._region_timer
-        if timer is None and self.main_window._recorder is not None:
+        if self.main_window._recorder is not None:
+            elapsed = self.main_window._recorder.get_display_time_ms()
             timer = self.main_window._recorder.timer
+        else:
+            timer = self.main_window._region_timer
+            elapsed = timer.get_elapsed_ms() if timer is not None and timer.is_started() else 0.0
         if debug:
             print(f"[_switch_recorder_overlay_to_timer] timer={timer} started={timer.is_started() if timer else None}")
         if timer is not None and timer.is_started():
-            elapsed = timer.get_elapsed_ms()
             s, f = self.main_window._ms_to_sf_for_timer(elapsed)
             if debug:
                 print(f"[_switch_recorder_overlay_to_timer] elapsed={elapsed:.1f} s={s} f={f}")
             overlay.set_time(
                 s, f, elapsed,
                 getattr(timer, "_rate", 1.0),
-                timer.is_manual_paused(),
+                timer.is_manual_paused() if hasattr(timer, "is_manual_paused") else False,
             )
         else:
             if debug:
@@ -569,23 +578,67 @@ class RecorderTab(QWidget):
 
     def _update_recorder_overlay_time(self, overlay):
         """刷新录制浮窗的计时显示。"""
-        debug = "recorder" in set(self.main_window.combo_rec_debug.checked_data())
-        timer = self.main_window._region_timer
-        if timer is None and self.main_window._recorder is not None:
+        debug_keys = set(self.main_window.combo_rec_debug.checked_data())
+        debug = "recorder" in debug_keys or "loaded_script" in debug_keys
+        if self.main_window._recorder is not None:
+            elapsed = self.main_window._recorder.get_display_time_ms()
             timer = self.main_window._recorder.timer
-        if timer is None:
-            if debug:
-                print("[_update_recorder_overlay_time] timer is None")
-            return
-        elapsed = timer.get_elapsed_ms()
+        else:
+            timer = self.main_window._region_timer
+            if timer is None:
+                if debug:
+                    print("[_update_recorder_overlay_time] timer is None")
+                return
+            elapsed = timer.get_elapsed_ms()
         s, f = self.main_window._ms_to_sf_for_timer(elapsed)
         if debug:
             print(f"[_update_recorder_overlay_time] elapsed={elapsed:.1f} s={s} f={f}")
         overlay.set_time(
             s, f, elapsed,
             getattr(timer, "_rate", 1.0),
-            timer.is_manual_paused(),
+            timer.is_manual_paused() if hasattr(timer, "is_manual_paused") else False,
         )
+
+    def _on_executor_timer_adjusted(self):
+        """executor 中计时器被主动调整后，立即同步刷新悬浮窗显示。
+
+        使用 BlockingQueuedConnection 在主线程同步执行 set_time，避免跳帧
+        中间帧被 33ms 轮询间隔跳过。
+        """
+        overlay = getattr(self.main_window, "_recorder_overlay", None)
+        if overlay is None:
+            return
+        if not getattr(self, "_recorder_overlay_timer_mode", False):
+            return
+        try:
+            if self.main_window._recorder is not None:
+                elapsed = self.main_window._recorder.get_display_time_ms()
+                timer = self.main_window._recorder.timer
+            else:
+                timer = self.main_window._region_timer
+                if timer is None:
+                    return
+                elapsed = timer.get_elapsed_ms()
+            s, f = self.main_window._ms_to_sf_for_timer(elapsed)
+            if QThread.currentThread() == self.main_window.thread():
+                overlay.set_time(
+                    s, f, elapsed,
+                    getattr(timer, "_rate", 1.0),
+                    timer.is_manual_paused() if hasattr(timer, "is_manual_paused") else False,
+                )
+            else:
+                QMetaObject.invokeMethod(
+                    overlay, "set_time",
+                    Qt.ConnectionType.BlockingQueuedConnection,
+                    Q_ARG(int, s),
+                    Q_ARG(int, f),
+                    Q_ARG(float, elapsed),
+                    Q_ARG(float, getattr(timer, "_rate", 1.0)),
+                    Q_ARG(bool, timer.is_manual_paused() if hasattr(timer, "is_manual_paused") else False),
+                )
+        except Exception as e:
+            if "loaded_script" in set(self.main_window.combo_rec_debug.checked_data()):
+                print(f"[_on_executor_timer_adjusted] 更新失败: {e}")
 
     def _on_rec_stop_clicked(self):
         """主窗口“停止录制/关闭悬浮窗”按钮的统一入口。"""

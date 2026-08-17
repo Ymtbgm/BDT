@@ -183,7 +183,7 @@ LEFT_COLS_ADVANCE_MS: int = 18
 # 装载脚本模式下，最左三列 RETREAT/SKILL 的额外提前量。
 # 此时计时器直接返回游戏时间，2x 下同样的现实延迟对应双倍游戏时间，
 # 因此需要比 standalone 执行器的 18ms 更大。
-LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS: int = 45
+LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS: int = 27
 
 # _execute_cluster 中推进一帧的计时器补偿
 ADVANCE_FRAME_MS: float = 33.0
@@ -196,8 +196,8 @@ WAIT_SPIN_THRESHOLD_MS: int = 5
 TWOX_EARLY_TRIGGER_MS: int = 0
 
 # 装载脚本模式下（RegionStateTimer 已返回缩放游戏时间）的 wait_until 提前量，
-# 用于抵消空格键到游戏真正暂停的延迟。按帧估算：30fps 下约 1 帧 33ms。
-LOADED_SCRIPT_EARLY_TRIGGER_MS: int = 30
+# 用于抵消空格键到游戏真正暂停的延迟。按帧估算：30fps 下 2 帧约 66ms。
+LOADED_SCRIPT_EARLY_TRIGGER_MS: int = 66
 
 # ============================================================
 # 键位与热键 (action.py 默认配置)

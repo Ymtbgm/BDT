@@ -60,6 +60,10 @@ class ScriptModel(BaseModel):
         description="干员与召唤物的绑定关系，执行器在干员撤退时据此清理对应召唤物",
     )
     actions: List[OperatorAction] = Field(default_factory=list, description="时间轴操作序列")
+    takeover_boundary_index: Optional[int] = Field(
+        default=None,
+        description="装载脚本执行与用户接管后录制的分界索引；None 表示无接管或纯录制脚本",
+    )
 
     @model_validator(mode="before")
     @classmethod

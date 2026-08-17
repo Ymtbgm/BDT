@@ -1,15 +1,27 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata, collect_data_files, collect_dynamic_libs
 
+import os
+import shutil
+import tempfile
+
+# 项目根目录固定为 spec 文件所在目录，避免因为执行目录不同导致资源路径错误。
+_project_root = os.path.abspath(SPECPATH)
+
+# PyInstaller 在 Windows 上处理含中文路径的图标文件时容易报 FileNotFoundError，
+# 先把图标复制到临时 ASCII 路径再使用。
+_icon_src = os.path.join(_project_root, 'resource', 'gui_template', 'Icon.ico')
+_icon_path = _icon_src
+if os.path.exists(_icon_src):
+    try:
+        _icon_temp = os.path.join(tempfile.gettempdir(), 'BDT_Icon.ico')
+        shutil.copy(_icon_src, _icon_temp)
+        _icon_path = _icon_temp
+    except Exception:
+        _icon_path = _icon_src
+
 datas = []
 binaries = []
-import os
-# 打包时必须从 arknights_auto 目录执行 pyinstaller（或 build.bat），
-# 因此项目根目录直接使用当前工作目录。
-_project_root = os.getcwd()
-# 如果从外层目录执行，尝试用 spec 文件所在目录兜底
-if not os.path.exists(os.path.join(_project_root, 'entry.py')):
-    _project_root = os.path.dirname(os.path.abspath(SPECPATH))
 
 # 将 resource/ 下的静态资源（模板图、图标、levels.json、模型配置等）打包进输出目录
 _resource_dir = os.path.join(_project_root, 'resource')
@@ -148,7 +160,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
-    icon=os.path.join(_project_root, 'resource', 'gui_template', 'Icon.ico'),
+    icon=_icon_path,
 )
 coll = COLLECT(
     exe,

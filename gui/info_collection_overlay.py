@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from core.base.paths import GUI_TEMPLATE_DIR
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, pyqtSlot
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsDropShadowEffect,
     QSizePolicy, QPushButton,
@@ -132,6 +132,7 @@ class InfoCollectionOverlay(QWidget):
             "padding: 2px;"
         )
         self.start_button.setFont(QFont("Microsoft YaHei", 10))
+        self.start_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.stop_button = QPushButton("结束录制")
         self.stop_button.setFixedWidth(60)
         self.stop_button.setStyleSheet(
@@ -142,6 +143,7 @@ class InfoCollectionOverlay(QWidget):
             "padding: 2px;"
         )
         self.stop_button.setFont(QFont("Microsoft YaHei", 10))
+        self.stop_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.takeover_button = QPushButton("手动接管")
         self.takeover_button.setFixedWidth(70)
         self.takeover_button.setStyleSheet(
@@ -152,6 +154,7 @@ class InfoCollectionOverlay(QWidget):
             "padding: 2px;"
         )
         self.takeover_button.setFont(QFont("Microsoft YaHei", 10))
+        self.takeover_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.takeover_button.setVisible(False)
         self.button_layout.addWidget(self.start_button)
         self.button_layout.addWidget(self.stop_button)
@@ -271,6 +274,7 @@ class InfoCollectionOverlay(QWidget):
         self.main_label.setText(f"保存脚本到：{name}")
         self.update()
 
+    @pyqtSlot(int, int, float, float, bool)
     def set_time(self, seconds: int, frame: int, elapsed_ms: float = 0.0,
                  rate: float = 1.0, paused: bool = False):
         """切换到计时显示模式并更新时间。"""

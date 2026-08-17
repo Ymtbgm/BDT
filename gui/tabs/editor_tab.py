@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QGroupBox, QCheckBox, QHeaderView,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QBrush
 
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo, SummonInfo
 
@@ -25,6 +26,48 @@ class EditorTab(QWidget):
 
     def _clear_dirty(self):
         self._dirty = False
+
+    def _takeover_boundary(self) -> Optional[int]:
+        """返回装载脚本执行与用户接管录制的分界索引，None 表示无分界。"""
+        boundary = getattr(self.main_window.script, "takeover_boundary_index", None)
+        if boundary is None or boundary <= 0:
+            return None
+        if boundary >= len(self.main_window.script.actions):
+            return None
+        return boundary
+
+    def _table_row_to_action_idx(self, row: int) -> Optional[int]:
+        """将 action_table 行号映射到 script.actions 索引（考虑分界行）。"""
+        boundary = self._takeover_boundary()
+        if boundary is None:
+            return row if 0 <= row < len(self.main_window.script.actions) else None
+        if row == boundary:
+            return None
+        if row < boundary:
+            return row if 0 <= row < boundary else None
+        idx = row - 1
+        return idx if boundary <= idx < len(self.main_window.script.actions) else None
+
+    def _action_idx_to_table_row(self, idx: int) -> int:
+        """将 script.actions 索引映射到 action_table 行号（考虑分界行）。"""
+        boundary = self._takeover_boundary()
+        if boundary is None:
+            return idx
+        if idx < boundary:
+            return idx
+        return idx + 1
+
+    def _fill_divider_row(self, row: int):
+        """在 action_table 指定行填充接管分界线。"""
+        count = self.main_window.action_table.columnCount()
+        for col in range(count):
+            text = "—新录制部分—" if col == 3 else "—"
+            item = QTableWidgetItem(text)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setForeground(QColor(120, 120, 120))
+            item.setBackground(QBrush(QColor(240, 240, 240)))
+            self.main_window.action_table.setItem(row, col, item)
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -585,22 +628,30 @@ class EditorTab(QWidget):
         selected_time = None
         selected_action = None
         selected_op = None
-        idx = self.main_window.action_table.currentRow()
-        if 0 <= idx < len(self.main_window.script.actions):
-            selected_time = self.main_window.script.actions[idx].time_ms
-            selected_action = self.main_window.script.actions[idx].action
-            selected_op = self.main_window.script.actions[idx].operator_name
+        current_row = self.main_window.action_table.currentRow()
+        action_idx = self._table_row_to_action_idx(current_row)
+        if action_idx is not None:
+            act = self.main_window.script.actions[action_idx]
+            selected_time = act.time_ms
+            selected_action = act.action
+            selected_op = act.operator_name
 
         self.main_window.script.sort_actions()
-        self.main_window.action_table.setRowCount(len(self.main_window.script.actions))
+        boundary = self._takeover_boundary()
+        total_rows = len(self.main_window.script.actions) + (1 if boundary is not None else 0)
+        self.main_window.action_table.setRowCount(total_rows)
         new_idx = -1
+        table_row = 0
         for i, act in enumerate(self.main_window.script.actions):
+            if boundary is not None and i == boundary:
+                self._fill_divider_row(table_row)
+                table_row += 1
             s, f = self.main_window._ms_to_sf(act.time_ms)
-            self.main_window.action_table.setItem(i, 0, QTableWidgetItem(str(s)))
-            self.main_window.action_table.setItem(i, 1, QTableWidgetItem(str(f)))
+            self.main_window.action_table.setItem(table_row, 0, QTableWidgetItem(str(s)))
+            self.main_window.action_table.setItem(table_row, 1, QTableWidgetItem(str(f)))
             action_text = self.main_window._action_labels.get(act.action, act.action.value if act.action else "")
-            self.main_window.action_table.setItem(i, 2, QTableWidgetItem(action_text))
-            self.main_window.action_table.setItem(i, 3, QTableWidgetItem(act.operator_name or ""))
+            self.main_window.action_table.setItem(table_row, 2, QTableWidgetItem(action_text))
+            self.main_window.action_table.setItem(table_row, 3, QTableWidgetItem(act.operator_name or ""))
             grid = act.grid
             if act.action in (ActionType.ADD_SUMMON, ActionType.REMOVE_SUMMON):
                 grid_str = ""
@@ -621,15 +672,16 @@ class EditorTab(QWidget):
                     grid_str = f"{grid[0]},{grid[1]}" if grid else ""
                 except Exception:
                     grid_str = ""
-            self.main_window.action_table.setItem(i, 4, QTableWidgetItem(grid_str))
-            self.main_window.action_table.setItem(i, 5, QTableWidgetItem(act.direction or ""))
-            self.main_window.action_table.setItem(i, 6, QTableWidgetItem("是" if act.is_object else ""))
+            self.main_window.action_table.setItem(table_row, 4, QTableWidgetItem(grid_str))
+            self.main_window.action_table.setItem(table_row, 5, QTableWidgetItem(act.direction or ""))
+            self.main_window.action_table.setItem(table_row, 6, QTableWidgetItem("是" if act.is_object else ""))
             if (
                 act.time_ms == selected_time
                 and act.action == selected_action
                 and act.operator_name == selected_op
             ):
-                new_idx = i
+                new_idx = table_row
+            table_row += 1
 
         self.main_window.action_table.blockSignals(False)
         if new_idx >= 0:
@@ -649,52 +701,54 @@ class EditorTab(QWidget):
             return
         self.main_window._selecting = True
         try:
-            idx = self.main_window.action_table.currentRow()
-            if 0 <= idx < len(self.main_window.script.actions):
-                act = self.main_window.script.actions[idx]
-                s, f = self.main_window._ms_to_sf(act.time_ms)
-                self.main_window.edit_time_s.setValue(s)
-                self.main_window.edit_time_f.setValue(f)
-                self.main_window.combo_action.setCurrentText(self.main_window._action_labels.get(act.action, act.action.value if act.action else ""))
-                self.main_window.combo_op.setEditText(act.operator_name or "")
-                if act.action == ActionType.ADD_ITEM:
-                    if act.grid:
-                        self.main_window.edit_item_index.setValue(act.grid[0])
-                        self.main_window.edit_item_charges.setValue(act.grid[1])
-                    else:
-                        self.main_window.edit_item_index.setValue(0)
-                        self.main_window.edit_item_charges.setValue(1)
-                elif act.action == ActionType.ADD_SUMMON:
-                    if act.grid:
-                        self.main_window.edit_summon_charges.setValue(max(1, act.grid[0]))
-                    else:
-                        self.main_window.edit_summon_charges.setValue(1)
-                elif act.action == ActionType.REMOVE_SUMMON:
-                    pass
-                elif act.action == ActionType.RESET_SUMMON:
-                    if act.grid:
-                        self.main_window.edit_summon_charges.setValue(max(0, act.grid[0]))
-                    else:
-                        self.main_window.edit_summon_charges.setValue(1)
+            idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
+            if idx is None:
+                return
+            act = self.main_window.script.actions[idx]
+            s, f = self.main_window._ms_to_sf(act.time_ms)
+            self.main_window.edit_time_s.setValue(s)
+            self.main_window.edit_time_f.setValue(f)
+            self.main_window.combo_action.setCurrentText(self.main_window._action_labels.get(act.action, act.action.value if act.action else ""))
+            self.main_window.combo_op.setEditText(act.operator_name or "")
+            if act.action == ActionType.ADD_ITEM:
+                if act.grid:
+                    self.main_window.edit_item_index.setValue(act.grid[0])
+                    self.main_window.edit_item_charges.setValue(act.grid[1])
                 else:
-                    grid = act.grid
-                    if (
-                        grid is None
-                        and act.action in (ActionType.RETREAT, ActionType.SKILL)
-                        and act.operator_name
-                    ):
-                        grid = self._get_default_grid_for_action(idx, act.operator_name)
-                    self.main_window.edit_grid.setText(f"{grid[0]},{grid[1]}" if grid else "")
-                self.main_window.edit_dir.setCurrentText(act.direction or "")
-                self.main_window.chk_is_object.setChecked(act.is_object)
-                self._on_action_type_changed()
+                    self.main_window.edit_item_index.setValue(0)
+                    self.main_window.edit_item_charges.setValue(1)
+            elif act.action == ActionType.ADD_SUMMON:
+                if act.grid:
+                    self.main_window.edit_summon_charges.setValue(max(1, act.grid[0]))
+                else:
+                    self.main_window.edit_summon_charges.setValue(1)
+            elif act.action == ActionType.REMOVE_SUMMON:
+                pass
+            elif act.action == ActionType.RESET_SUMMON:
+                if act.grid:
+                    self.main_window.edit_summon_charges.setValue(max(0, act.grid[0]))
+                else:
+                    self.main_window.edit_summon_charges.setValue(1)
+            else:
+                grid = act.grid
+                if (
+                    grid is None
+                    and act.action in (ActionType.RETREAT, ActionType.SKILL)
+                    and act.operator_name
+                ):
+                    grid = self._get_default_grid_for_action(idx, act.operator_name)
+                self.main_window.edit_grid.setText(f"{grid[0]},{grid[1]}" if grid else "")
+            self.main_window.edit_dir.setCurrentText(act.direction or "")
+            self.main_window.chk_is_object.setChecked(act.is_object)
+            self._on_action_type_changed()
         finally:
             self.main_window._selecting = False
 
     def _on_cell_changed(self, row, col):
-        if not (0 <= row < len(self.main_window.script.actions)):
+        idx = self._table_row_to_action_idx(row)
+        if idx is None:
             return
-        act = self.main_window.script.actions[row]
+        act = self.main_window.script.actions[idx]
         val = self.main_window.action_table.item(row, col).text().strip()
 
         if col in (0, 1):
@@ -790,8 +844,8 @@ class EditorTab(QWidget):
             self.main_window.chk_is_object.setEnabled(False)
 
     def _apply_edit(self):
-        idx = self.main_window.action_table.currentRow()
-        if not (0 <= idx < len(self.main_window.script.actions)):
+        idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
+        if idx is None:
             return
         act = self.main_window.script.actions[idx]
         act.time_ms = self.main_window._sf_to_ms(self.main_window.edit_time_s.value(), self.main_window.edit_time_f.value())
@@ -946,44 +1000,55 @@ class EditorTab(QWidget):
         self._mark_dirty()
         self._refresh_table()
         new_idx = len(self.main_window.script.actions) - 1
-        self.main_window.action_table.selectRow(new_idx)
+        new_row = self._action_idx_to_table_row(new_idx)
+        self.main_window.action_table.selectRow(new_row)
         self.main_window.action_table.scrollToItem(
-            self.main_window.action_table.item(new_idx, 0),
+            self.main_window.action_table.item(new_row, 0),
             QAbstractItemView.ScrollHint.EnsureVisible,
         )
 
     def _remove_action(self):
         self._apply_edit()
-        idx = self.main_window.action_table.currentRow()
-        if 0 <= idx < len(self.main_window.script.actions):
-            del self.main_window.script.actions[idx]
-            self._mark_dirty()
-            self._refresh_table()
-            if idx < len(self.main_window.script.actions):
-                self.main_window.action_table.selectRow(idx)
-            elif self.main_window.script.actions:
-                self.main_window.action_table.selectRow(len(self.main_window.script.actions) - 1)
+        idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
+        if idx is None:
+            return
+        del self.main_window.script.actions[idx]
+        boundary = self._takeover_boundary()
+        if boundary is not None and idx < boundary:
+            self.main_window.script.takeover_boundary_index = boundary - 1
+            if self.main_window.script.takeover_boundary_index <= 0:
+                self.main_window.script.takeover_boundary_index = None
+        self._mark_dirty()
+        self._refresh_table()
+        if idx < len(self.main_window.script.actions):
+            new_row = self._action_idx_to_table_row(idx)
+            self.main_window.action_table.selectRow(new_row)
+        elif self.main_window.script.actions:
+            new_row = self._action_idx_to_table_row(len(self.main_window.script.actions) - 1)
+            self.main_window.action_table.selectRow(new_row)
 
     def _move_up(self):
         self._apply_edit()
-        idx = self.main_window.action_table.currentRow()
-        if idx > 0:
+        idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
+        if idx is not None and idx > 0:
             self.main_window.script.actions[idx], self.main_window.script.actions[idx - 1] = (
                 self.main_window.script.actions[idx - 1],
                 self.main_window.script.actions[idx],
             )
             self._mark_dirty()
             self._refresh_table()
-            self.main_window.action_table.selectRow(idx - 1)
+            new_row = self._action_idx_to_table_row(idx - 1)
+            self.main_window.action_table.selectRow(new_row)
 
     def _move_down(self):
         self._apply_edit()
-        idx = self.main_window.action_table.currentRow()
-        if 0 <= idx < len(self.main_window.script.actions) - 1:
+        idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
+        if idx is not None and 0 <= idx < len(self.main_window.script.actions) - 1:
             self.main_window.script.actions[idx], self.main_window.script.actions[idx + 1] = (
                 self.main_window.script.actions[idx + 1],
                 self.main_window.script.actions[idx],
             )
             self._mark_dirty()
             self._refresh_table()
-            self.main_window.action_table.selectRow(idx + 1)
+            new_row = self._action_idx_to_table_row(idx + 1)
+            self.main_window.action_table.selectRow(new_row)

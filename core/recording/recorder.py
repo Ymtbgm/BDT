@@ -65,13 +65,21 @@ class _ScriptTimerWrapper:
         try:
             roi_gray = cost_sync.capture_roi_gray()
             if roi_gray is None:
+                if self._debug:
+                    self._log("费用条初始修正: 无法截取 ROI")
                 return
             count = int(np.sum(roi_gray > cost_sync.threshold))
             elapsed = self.get_elapsed_ms()
             cost_frame = cost_sync.current_frame(count, elapsed)
+            cal = cost_sync.get_calibration(elapsed)
+            if self._debug:
+                target_frame = cost_sync.target_frame_index(elapsed)
+                self._log(
+                    f"费用条初始修正: count={count}, elapsed={elapsed:.1f}, "
+                    f"cal={cal.name}, target_frame={target_frame}, cost_frame={cost_frame}"
+                )
             if cost_frame is None:
                 return
-            cal = cost_sync.get_calibration(elapsed)
             frame_duration = cal.frame_duration_ms
             cycle_duration = cal.cycle_duration_ms()
             offset = cost_sync.frame_offset_ms
@@ -80,11 +88,16 @@ class _ScriptTimerWrapper:
             desired_phase = cost_frame * frame_duration
             corrected = cycle_index * cycle_duration + desired_phase + offset
             diff = corrected - elapsed
+            if self._debug:
+                self._log(
+                    f"费用条初始修正计算: cycle_index={cycle_index}, "
+                    f"desired_phase={desired_phase:.1f}, corrected={corrected:.1f}, diff={diff:+.1f}"
+                )
             if abs(diff) <= constants.COST_BAR_SYNC_MAX_DIFF_MS:
                 self.adjust(diff)
                 if self._debug:
                     self._log(
-                        f"费用条初始修正 {diff:+.1f}ms -> {self.get_elapsed_ms():.1f}ms "
+                        f"费用条初始修正已应用 {diff:+.1f}ms -> {self.get_elapsed_ms():.1f}ms "
                         f"(frame={cost_frame}, cycle={cycle_index})"
                     )
             elif self._debug:
@@ -120,6 +133,10 @@ class _ScriptTimerWrapper:
             delta_ms = (time.perf_counter() - self._last_resume_time) * 1000.0 * self._rate
             return self._base_elapsed + self._accumulated + delta_ms
         return self._base_elapsed + self._accumulated
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
 
     def pause(self):
         if not self._paused:
@@ -267,12 +284,14 @@ class ActionRecorder:
 
         self.loaded_script = loaded_script
         self.loaded_script_path = loaded_script_path
+        self._script_timer_wrapper: Optional[_ScriptTimerWrapper] = None
         self._executed_actions: List[OperatorAction] = []
         self._initial_deployed: Dict[Tuple[int, int], str] = {}
         self._initial_bar_state: Optional[List[Dict]] = None
         self._takeover_requested = False
         self._on_takeover_callback: Optional[Callable[[], None]] = None
         self._on_script_executed_callback: Optional[Callable[[], None]] = None
+        self._on_timer_adjusted_callback: Optional[Callable[[], None]] = None
 
         self.initial_operator_count = max(0, initial_operator_count)
         self.initial_item_count = max(0, initial_item_count)
@@ -466,6 +485,18 @@ class ActionRecorder:
     def is_squad_capture_done(self) -> bool:
         return getattr(self, "_squad_keyframes_captured", False)
 
+    def get_display_time_ms(self) -> float:
+        """返回用于悬浮窗显示的时间（毫秒）。
+
+        装载脚本执行期间返回包装器时间（脚本实际推进时间），
+        否则返回底层 RegionStateTimer 时间。
+        """
+        if self._script_timer_wrapper is not None:
+            return self._script_timer_wrapper.get_elapsed_ms()
+        if self.timer is not None:
+            return self.timer.get_elapsed_ms()
+        return 0.0
+
     # ------------------------------------------------------------------
     # 会话与会话目录
     # ------------------------------------------------------------------
@@ -485,6 +516,19 @@ class ActionRecorder:
         if not self.debug:
             return
         line = f"[录制器] {message}"
+        print(line)
+        if self._debug_log_path is not None:
+            try:
+                with self._debug_log_path.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception:
+                pass
+
+    def _log_loaded_script(self, message: str):
+        """在装载脚本 debug 模式时输出到控制台并写入会话日志文件。"""
+        if not self.debug_loaded_script:
+            return
+        line = f"[装载脚本] {message}"
         print(line)
         if self._debug_log_path is not None:
             try:
@@ -712,6 +756,7 @@ class ActionRecorder:
                 merged_actions.append(copied)
             merged_actions.sort(key=lambda x: x.time_ms)
             base.actions = merged_actions
+            base.takeover_boundary_index = len(self._executed_actions)
 
             # 合并用户录制阶段出现的新干员/道具/召唤物/绑定，避免基础脚本里没有这些单位
             seen_ops = set(base.operators)
@@ -770,6 +815,30 @@ class ActionRecorder:
         top = self.capture.monitor.get("top", 0)
         return abs_x - left, abs_y - top
 
+    def _focus_game_window(self, click: bool = True):
+        """将输入焦点切回游戏窗口。
+
+        用户点击悬浮窗的“手动接管”后，焦点会落在悬浮窗上，导致后续模拟的
+        暂停键无法作用于游戏。通过点击游戏窗口中心（或仅刷新窗口矩形），
+        确保游戏重新获得焦点，暂停键能被正确接收。
+        """
+        try:
+            monitor = self.capture.monitor
+            if monitor is None:
+                self.capture.refresh_rect()
+                monitor = self.capture.monitor
+            center_x = monitor["left"] + monitor["width"] // 2
+            center_y = monitor["top"] + monitor["height"] // 2
+            if click:
+                self._log(f"点击游戏窗口中心以重新聚焦: ({center_x}, {center_y})")
+                action.select_at(center_x, center_y)
+                time.sleep(0.15)
+            else:
+                self._log(f"刷新游戏窗口矩形: ({monitor['left']},{monitor['top']} "
+                          f"{monitor['width']}x{monitor['height']})")
+        except Exception as e:
+            self._log(f"聚焦游戏窗口失败: {e}")
+
     def _nearest_grid(self, win_x: int, win_y: int, side: bool = False) -> Optional[Tuple[int, int]]:
         # side 视角下部署落点偏下一行，判定前将坐标上移固定像素（按当前分辨率缩放）
         if side:
@@ -795,16 +864,24 @@ class ActionRecorder:
     def _total_bar_slots(self) -> int:
         return self.initial_operator_count + self.initial_item_count
 
+    def _bar_layout_total(self) -> int:
+        """返回用于命中检测/坐标计算的部署栏槽位总数。
+
+        实际栏位可能因技能/召唤物临时增加，但 UI 始终保留最多 12 个槽位的
+        宽度；返回 max(实际, 12) 确保点击最左侧召唤物/道具位也能被识别。
+        """
+        return max(self._total_bar_slots(), 12)
+
     def _bar_positions(self) -> Dict[int, Tuple[int, int]]:
         """返回部署栏索引（0 为最右侧）到绝对屏幕坐标的映射。"""
-        total = self._total_bar_slots()
+        total = self._bar_layout_total()
         if total == 0:
             return {}
         w, h = self.capture.get_window_size()
         left = self.capture.monitor.get("left", 0)
         top = self.capture.monitor.get("top", 0)
         bar_y = int(h * 1500 / 1600)
-        cell_w = w / 12 if total <= 12 else w / total
+        cell_w = w / total
         positions = {}
         for i in range(total):
             cx = w - cell_w * (i + 0.5)
@@ -812,11 +889,11 @@ class ActionRecorder:
         return positions
 
     def _bar_index_at(self, win_x: int, win_y: int) -> Optional[int]:
-        total = self._total_bar_slots()
+        total = self._bar_layout_total()
         if total == 0:
             return None
         positions = self._bar_positions()
-        cell_w = self.capture.get_window_size()[0] / 12 if total <= 12 else self.capture.get_window_size()[0] / total
+        cell_w = self.capture.get_window_size()[0] / total
         half = cell_w / 2
         for i, (cx, cy) in positions.items():
             rel_cx = cx - self.capture.monitor.get("left", 0)
@@ -831,7 +908,8 @@ class ActionRecorder:
         """判断鼠标是否仍处于整个部署栏矩形区域内（而非单个 slot 的命中框）。
 
         截图/取消部署的判定应基于完整区域，避免光标位于 slot 间隙或栏边缘时
-        被误判为已移出部署区。
+        被误判为已移出部署区。这里使用 12 槽位宽度，确保技能生成的召唤物位
+        也被包含在内。
         """
         total = self._total_bar_slots()
         if total == 0:
@@ -840,13 +918,11 @@ class ActionRecorder:
         left = self.capture.monitor.get("left", 0)
         top = self.capture.monitor.get("top", 0)
 
-        # y 范围与 _bar_capture_roi 保持一致：上移到 1370，覆盖到窗口底部
+        layout_total = self._bar_layout_total()
+        cell_w = w / layout_total
         bar_top = top + int(h * self._BAR_CAPTURE_TOP_RATIO) - 20
         bar_bottom = top + h
-
-        # x 范围：实际有 slot 的区域，从右侧向左 total * cell_w
-        cell_w = w / 12 if total <= 12 else w / total
-        bar_left = left + max(0, int(w - cell_w * total))
+        bar_left = left + max(0, int(w - cell_w * layout_total))
         bar_right = left + w
 
         return bar_left <= win_x <= bar_right and bar_top <= win_y <= bar_bottom
@@ -1184,7 +1260,7 @@ class ActionRecorder:
         if self.loaded_script is None:
             return
 
-        self._log("开始执行预装载脚本...")
+        self._log_loaded_script("开始执行预装载脚本...")
         with self._lock:
             self._state = "EXECUTING_LOADED_SCRIPT"
 
@@ -1197,7 +1273,7 @@ class ActionRecorder:
         try:
             self.timer._unregister_hotkey()
         except Exception as e:
-            self._log(f"注销计时器键盘监听器异常: {e}")
+            self._log_loaded_script(f"注销计时器键盘监听器异常: {e}")
 
         # 复制脚本，移除开头 time_ms==0 的倍率切换动作，避免后续强制 2x 后重复切换
         script_to_run = self.loaded_script.model_copy(deep=True)
@@ -1211,10 +1287,12 @@ class ActionRecorder:
         wrapper = _ScriptTimerWrapper(
             self.timer, rate=constants.FAST2X_RATE, debug=self.debug_loaded_script
         )
+        self._script_timer_wrapper = wrapper
         executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug_loaded_script)
         executor.timer = wrapper
+        executor.on_timer_adjusted = self._on_timer_adjusted_callback
 
-        # 费用条同步
+        # 费用条同步：普通模式使用 10s 前后不同校准表，合约 tag 使用单表
         if self._cost_bar_calibration_name:
             cost_sync = CostBarSyncCC(
                 self.capture,
@@ -1225,9 +1303,17 @@ class ActionRecorder:
             cost_sync = CostBarSyncCC(
                 self.capture,
                 calibration_name="normal",
+                calibration_schedule=[
+                    (0.0, "normal_early"),
+                    (10000.0, "normal"),
+                ],
                 debug=self.debug_cost_bar,
             )
         executor.set_cost_sync(cost_sync)
+        self._log_loaded_script(
+            f"费用条同步初始化: calibration_name={self._cost_bar_calibration_name or 'normal'} "
+            f"schedule={getattr(cost_sync, '_schedule', None)}"
+        )
 
         # 先加载原始脚本，用于初始校准；同步助战标记，保证部署栏排序与点击位置正确
         borrow_support = self.support_count > 0
@@ -1242,18 +1328,18 @@ class ActionRecorder:
         # 进入本函数时游戏已由 _wait_for_timer_start 暂停，稍作稳定后直接读取当前时间。
         # 装载脚本模式下计时器已通过费用条启动检测启动，不再用 calibrate_timer_at_pause
         # 做帧级校准，避免费用条周期歧义导致初始漂移。
-        self._log("游戏已暂停，读取计时器当前点...")
+        self._log_loaded_script("游戏已暂停，读取计时器当前点...")
         time.sleep(1.0)
 
         current_ms = self.timer.get_elapsed_ms()
-        self._log(f"计时器当前点 current_ms={current_ms:.1f}")
+        self._log_loaded_script(f"RegionStateTimer 当前点 current_ms={current_ms:.1f}")
 
         # RegionStateTimer 已按游戏倍率缩放时间，因此不需要像 main.py 那样压缩动作时间；
         # 只需把游戏切到二倍速，executor 直接按原始 time_ms 等待即可。
         action.press_key(action.speed_key())
         time.sleep(0.5)
 
-        self._log("恢复游戏，开始执行脚本...")
+        self._log_loaded_script("恢复游戏，开始执行脚本...")
         action.press_key(self._pause_key)
         # 监听器已注销，直接手动恢复底层计时器
         self.timer.resume()
@@ -1262,8 +1348,16 @@ class ActionRecorder:
             time.sleep(0.01)
         time.sleep(0.1)
 
+        self._log_loaded_script(
+            f"恢复后 RegionStateTimer elapsed={self.timer.get_elapsed_ms():.1f} "
+            f"manual_paused={self.timer.is_manual_paused()}"
+        )
+
         # 与包装器同步启动时间点，此后 executor.wait_until 使用固定 2x 推进
         wrapper.sync_start(cost_sync=cost_sync)
+        self._log_loaded_script(
+            f"wrapper 启动后 elapsed={wrapper.get_elapsed_ms():.1f}"
+        )
 
         # 在独立事件循环中执行，同时轮询接管请求
         loop = asyncio.new_event_loop()
@@ -1273,7 +1367,13 @@ class ActionRecorder:
         finally:
             loop.close()
             # 脚本结束后把底层 RegionStateTimer 对齐回包装器时间，以便继续录制
+            self._log_loaded_script(
+                f"脚本执行结束/接管，wrapper elapsed={wrapper.get_elapsed_ms():.1f}"
+            )
             wrapper.sync_underlying()
+            self._log_loaded_script(
+                f"同步回 RegionStateTimer 后 elapsed={self.timer.get_elapsed_ms():.1f}"
+            )
 
         # 脚本已执行完毕或被接管，进入过渡状态：同步场上/部署栏状态、
         # 导出当前部署区的实际名称与数量给离线解析器，给用户明确的等待提示。
@@ -1306,6 +1406,8 @@ class ActionRecorder:
             )
 
         # 暂停游戏，切换到用户录制
+        # 先点击游戏窗口中心重新聚焦，否则悬浮窗可能抢走焦点导致暂停键失效
+        self._focus_game_window()
         action.press_key(self._pause_key)
         # 监听器已注销，直接手动暂停底层计时器
         self.timer.pause()
@@ -1341,6 +1443,7 @@ class ActionRecorder:
             f"预装载脚本执行结束，已执行 {len(self._executed_actions)} 个操作，"
             f"接管={self._takeover_requested}"
         )
+        self._script_timer_wrapper = None
 
     async def _run_executor_with_takeover(self, executor: ScriptExecutor):
         """在 executor 运行的同时轮询接管/停止请求。"""
@@ -1366,6 +1469,10 @@ class ActionRecorder:
     def set_takeover_callback(self, callback: Optional[Callable[[bool], None]]):
         """设置接管模式切换回调，参数 True 表示进入接管模式（显示接管按钮）。"""
         self._on_takeover_callback = callback
+
+    def set_timer_adjusted_callback(self, callback: Optional[Callable[[], None]]):
+        """设置计时器主动调整后的回调，用于即时刷新悬浮窗显示。"""
+        self._on_timer_adjusted_callback = callback
 
     def _now_ms(self) -> float:
         t = self._get_time_ms()

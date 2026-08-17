@@ -1162,6 +1162,11 @@ class RegionStateTimer:
     def is_started(self) -> bool:
         return self._started
 
+    @property
+    def cost_sync(self):
+        """返回内部费用条同步对象，供 UI 根据当前校准表转换时间。"""
+        return self._cost_bar_sync
+
     def tick(self) -> dict:
         """手动调用一帧检测。返回当前状态信息字典。"""
         if not self._running:

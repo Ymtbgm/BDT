@@ -4,16 +4,22 @@
   "grid_rows": 9,
   "grid_cols": 13,
   "operators": [
+    "隐德来希",
     "伊内丝",
     "死芒",
-    "锏",
-    "谬因",
-    "菲亚梅塔"
+    "澄闪",
+    "黑键",
+    "__squad_5__",
+    "__squad_6__",
+    "__squad_7__",
+    "__squad_8__",
+    "__squad_9__",
+    "__squad_10__"
   ],
   "items": [
     {
-      "name": "纯净结晶",
-      "charges": 10
+      "name": "__item_1__",
+      "charges": 9
     },
     {
       "name": "结晶消除桩",
@@ -30,40 +36,7 @@
   "summon_bindings": [],
   "actions": [
     {
-      "time_ms": 6608,
-      "action": "deploy",
-      "operator_name": "锏",
-      "grid": [
-        4,
-        4
-      ],
-      "direction": "left",
-      "is_object": false
-    },
-    {
-      "time_ms": 14548,
-      "action": "deploy",
-      "operator_name": "纯净结晶",
-      "grid": [
-        3,
-        8
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 33334,
-      "action": "skill",
-      "operator_name": "锏",
-      "grid": [
-        4,
-        4
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 36882,
+      "time_ms": 13857,
       "action": "deploy",
       "operator_name": "结晶消除桩",
       "grid": [
@@ -74,18 +47,7 @@
       "is_object": false
     },
     {
-      "time_ms": 46010,
-      "action": "retreat",
-      "operator_name": "锏",
-      "grid": [
-        4,
-        4
-      ],
-      "direction": null,
-      "is_object": false
-    },
-    {
-      "time_ms": 49237,
+      "time_ms": 28133,
       "action": "add_summon",
       "operator_name": "结晶消除桩",
       "grid": [
@@ -96,12 +58,45 @@
       "is_object": false
     },
     {
-      "time_ms": 49237,
+      "time_ms": 28133,
       "action": "deploy",
-      "operator_name": "菲亚梅塔",
+      "operator_name": "死芒",
       "grid": [
-        5,
+        3,
+        4
+      ],
+      "direction": "left",
+      "is_object": false
+    },
+    {
+      "time_ms": 48131,
+      "action": "deploy",
+      "operator_name": "伊内丝",
+      "grid": [
+        2,
         9
+      ],
+      "direction": "down",
+      "is_object": false
+    },
+    {
+      "time_ms": 59368,
+      "action": "deploy",
+      "operator_name": "伊内丝",
+      "grid": [
+        7,
+        8
+      ],
+      "direction": "left",
+      "is_object": false
+    },
+    {
+      "time_ms": 70185,
+      "action": "deploy",
+      "operator_name": "伊内丝",
+      "grid": [
+        4,
+        10
       ],
       "direction": "left",
       "is_object": false
