@@ -17,6 +17,12 @@ from core.capture.capture import WindowCapture
 from core.vision.ocr_engine import OCREngine
 from core.recording.recorder import ActionRecorder
 from core.game_state.region_state_timer import RegionStateTimer
+from core.map.tile_pos import load_stage_dimensions
+from gui._window_effects import (
+    remove_dwm_glass_border,
+    set_window_topmost,
+    set_tool_window_style,
+)
 from gui.info_collection_overlay import InfoCollectionOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ItemInfo, ScriptModel
@@ -87,6 +93,18 @@ class RecorderTab(QWidget):
             "部署区初始道具种类数。道具将排列在部署栏最右侧。"
         )
         row.addWidget(self.main_window.rec_initial_item_count)
+        row.addStretch()
+        param_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("接管快捷键:"))
+        self.main_window.rec_takeover_hotkey = QLineEdit()
+        self.main_window.rec_takeover_hotkey.setPlaceholderText("F9")
+        self.main_window.rec_takeover_hotkey.setMaximumWidth(80)
+        self.main_window.rec_takeover_hotkey.setToolTip(
+            "装载脚本执行期间，按下该快捷键可立即手动接管，进入用户录制模式。"
+        )
+        row.addWidget(self.main_window.rec_takeover_hotkey)
         row.addStretch()
         param_layout.addLayout(row)
 
@@ -209,9 +227,13 @@ class RecorderTab(QWidget):
         self.main_window.rec_stage_code.textChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_operator_count.valueChanged.connect(self.main_window._save_config)
         self.main_window.rec_initial_item_count.valueChanged.connect(self.main_window._save_config)
+        self.main_window.rec_initial_operator_count.valueChanged.connect(self._sync_recorder_counts)
+        self.main_window.rec_initial_item_count.valueChanged.connect(self._sync_recorder_counts)
         self.main_window.rec_cost_tag.currentIndexChanged.connect(self.main_window._save_config)
         self.main_window.combo_rec_debug.item_changed.connect(self.main_window._save_config)
         self.main_window.rec_chk_support_op.stateChanged.connect(self.main_window._save_config)
+        self.main_window.rec_chk_support_op.stateChanged.connect(self._sync_recorder_counts)
+        self.main_window.rec_takeover_hotkey.textChanged.connect(self.main_window._save_config)
         self.main_window.rec_loaded_script_path.textChanged.connect(self._update_loaded_script_status)
 
         # 使用说明
@@ -224,7 +246,7 @@ class RecorderTab(QWidget):
             "<li>首次OCR加载较慢，请赖心等待</li>"
             "<li>在编队界面点击开始录制，显示'加载完毕，请进入作战...'即可进入作战。初次点击后不需要再点击悬浮窗开始录制</li>"
             "<li>干员被击退前请主动撤退，否则也会错位。</li>"
-            "<li>F10为快捷键停止录制，在完成按下悬浮窗'结束录制'完成一次录制后，在编队界面再次点击开始录制即可继续下一次录制。</li>"
+            "<li>F10为快捷键停止录制；装载脚本时默认按F9可手动接管（可在“接管快捷键”中修改）。在完成按下悬浮窗'结束录制'完成一次录制后，在编队界面再次点击开始录制即可继续下一次录制。</li>"
             "<li>装载脚本后，在编队界面不需要操作，会自动执行脚本，脚本结束后会自动暂停，继续游戏会自动继续录制操作，也可以中途手动接管。</li>"
             "<li>录制结束后会自动离线识别并生成脚本，若出现 __unknown__ / __item__ 可以手动修正，这是因为该单位未被部署，不修正不会影响脚本正常执行。</li>"
             "</ul>"
@@ -351,15 +373,43 @@ class RecorderTab(QWidget):
             self.main_window._recorder.take_over()
             self.main_window.rec_status.setText("状态: 已请求手动接管")
 
+    def _sync_recorder_counts(self):
+        """录制参数中的初始干员/道具/助战变更时同步到运行中的录制器。"""
+        recorder = getattr(self.main_window, "_recorder", None)
+        if recorder is None:
+            return
+        try:
+            recorder.set_initial_operator_count(
+                self.main_window.rec_initial_operator_count.value()
+            )
+            recorder.set_initial_item_count(
+                self.main_window.rec_initial_item_count.value()
+            )
+            recorder.set_support_count(
+                1 if self.main_window.rec_chk_support_op.isChecked() else 0
+            )
+        except Exception as e:
+            print(f"[recorder_tab] 同步录制器参数失败: {e}")
+
     def _start_recording(self):
         initial_operator_count = self.main_window.rec_initial_operator_count.value()
         if initial_operator_count <= 0:
             QMessageBox.warning(self.main_window, "参数错误", "请在“初始干员数量”中填写编队携带的干员数量（至少 1）。")
             return
 
+        initial_item_count = self.main_window.rec_initial_item_count.value()
+
         stage_code = self.main_window.rec_stage_code.text().strip()
         if not stage_code:
             QMessageBox.warning(self.main_window, "参数错误", "请填写关卡代号（如 1-7）。")
+            return
+
+        if load_stage_dimensions(stage_code) is None:
+            QMessageBox.warning(
+                self.main_window,
+                "关卡代号错误",
+                f"未在 levels.json 中找到关卡代号 '{stage_code}'，请检查输入的关卡代号是否正确。",
+            )
             return
 
         loaded_script_path = self.main_window.rec_loaded_script_path.text().strip()
@@ -377,16 +427,31 @@ class RecorderTab(QWidget):
                 )
                 return
 
+            script_operator_count = len(loaded_script.operators or [])
+            script_item_count = len(loaded_script.items or [])
+            if (
+                script_operator_count != initial_operator_count
+                or script_item_count != initial_item_count
+            ):
+                msg = QMessageBox(self.main_window)
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setWindowTitle("初始数量不一致")
+                msg.setText(
+                    f"装载脚本的初始数量与当前录制参数不一致，请检查。\n\n"
+                    f"脚本：干员 {script_operator_count} 个，道具 {script_item_count} 个\n"
+                    f"当前参数：干员 {initial_operator_count} 个，道具 {initial_item_count} 个\n\n"
+                    f"若继续执行，部署栏点击位置可能与脚本预期不符。"
+                )
+                execute_btn = msg.addButton("直接执行", QMessageBox.ButtonRole.AcceptRole)
+                edit_btn = msg.addButton("返回编辑", QMessageBox.ButtonRole.RejectRole)
+                msg.setDefaultButton(edit_btn)
+                msg.exec()
+                if msg.clickedButton() == edit_btn:
+                    return
+
         # 如果已有悬浮窗/录制器，先清理掉，重新走完整流程
         self._cleanup_recorder_overlay()
 
-        try:
-            self.main_window._recorder_capture = WindowCapture(backend="mss")
-        except Exception as e:
-            QMessageBox.critical(self.main_window, "错误", f"窗口捕获初始化失败:\n{e}")
-            return
-
-        initial_item_count = self.main_window.rec_initial_item_count.value()
         support_count = 1 if self.main_window.rec_chk_support_op.isChecked() else 0
         debug_keys = set(self.main_window.combo_rec_debug.checked_data())
         rec_debug = "recorder" in debug_keys
@@ -394,6 +459,15 @@ class RecorderTab(QWidget):
         rec_debug_resolver = "resolver" in debug_keys
         rec_debug_screenshot = "screenshot" in debug_keys
         rec_debug_loaded_script = "loaded_script" in debug_keys
+
+        try:
+            self.main_window._recorder_capture = WindowCapture(
+                backend="mss",
+                debug=rec_debug,
+            )
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "错误", f"窗口捕获初始化失败:\n{e}")
+            return
 
         self._normal_overlay_started = False
         self._recorder_overlay_timer_mode = False
@@ -407,6 +481,9 @@ class RecorderTab(QWidget):
         )
         overlay.set_phase("正在初始化 OCR...")
         overlay.show()
+        remove_dwm_glass_border(overlay)
+        set_tool_window_style(overlay)
+        set_window_topmost(overlay)
         QApplication.processEvents()
 
         ocr = None
@@ -443,6 +520,7 @@ class RecorderTab(QWidget):
             initial_item_count=initial_item_count,
             support_count=support_count,
             pause_key=action.pause_key(),
+            takeover_hotkey=self.main_window.rec_takeover_hotkey.text().strip().upper() or "F9",
             matchstick_hotkeys=self.main_window.timer_tab._build_matchstick_hotkeys() or None,
             cost_bar_calibration_name=self.main_window.rec_cost_tag.currentData() or None,
             ocr=ocr,
@@ -450,9 +528,20 @@ class RecorderTab(QWidget):
             loaded_script=loaded_script,
             loaded_script_path=loaded_script_path,
         )
-        self.main_window._recorder.set_takeover_callback(
-            lambda show: overlay.show_takeover_mode(show)
-        )
+        def _on_takeover_mode_changed(show: bool):
+            # 录制器回调可能来自非主线程（键盘监听/脚本执行线程），
+            # 通过 QMetaObject.invokeMethod 保证 Qt UI 操作在主线程执行。
+            try:
+                QMetaObject.invokeMethod(
+                    overlay,
+                    "show_takeover_mode",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(bool, show),
+                )
+            except Exception as e:
+                print(f"[recorder_tab] 切换接管模式失败: {e}")
+
+        self.main_window._recorder.set_takeover_callback(_on_takeover_mode_changed)
         self.main_window._recorder.set_timer_adjusted_callback(
             self._on_executor_timer_adjusted
         )
@@ -495,6 +584,19 @@ class RecorderTab(QWidget):
             self._stop_recording()
             return
         overlay = getattr(self.main_window, "_recorder_overlay", None)
+
+        # 显示装载脚本执行异常（只显示一次）
+        loaded_script_error = getattr(self.main_window._recorder, "_loaded_script_error", None)
+        if loaded_script_error:
+            error_summary = loaded_script_error.splitlines()[0]
+            if len(error_summary) > 80:
+                error_summary = error_summary[:77] + "..."
+            if overlay is not None:
+                overlay.set_phase(f"脚本执行出错: {error_summary}")
+            self.main_window.rec_status.setText(f"状态: 脚本执行出错 - {error_summary}")
+            self.main_window._recorder._loaded_script_error = None
+            return
+
         debug_keys = set(self.main_window.combo_rec_debug.checked_data())
         debug = "recorder" in debug_keys or "loaded_script" in debug_keys
         if debug:

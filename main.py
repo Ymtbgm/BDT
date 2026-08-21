@@ -60,6 +60,8 @@ class Runner:
         import time
         self.debug = debug
         self.cost_tag = cost_tag
+        if self.debug:
+            print(f"[后端] Runner.__init__ 开始，debug={debug}, cost_tag={cost_tag}")
 
         if self.debug:
             set_verbose(True)
@@ -69,11 +71,12 @@ class Runner:
         self._abort = False
         self._stopping = False
         self._leak_detected = False
+        self._leak_reason: Optional[str] = None
         self.avg_capture_ms = 0.0
         self._setup_hotkeys()
 
         try:
-            self.capture = WindowCapture(backend="mss")
+            self.capture = WindowCapture(backend="mss", debug=self.debug)
 
             # engine: None 表示自动选择（优先 PaddleX ONNX Runtime，回退 PaddleOCR）
             # model_size: "mobile" 模型体积小、速度快；"server" 精度高但慢
@@ -113,8 +116,15 @@ class Runner:
 
             # 初始化漏怪重试处理器
             template_path = str(game_template("loss.png"))
+            failed_template_path = str(game_template("failed.png"))
+            mission_end_template_path = str(game_template("retry.png"))
             self.retry_handler = StageRetryHandler(
-                self.capture, self.selector, template_path=template_path, debug=self.debug
+                self.capture,
+                self.selector,
+                template_path=template_path,
+                failed_template_path=failed_template_path,
+                mission_end_template_path=mission_end_template_path,
+                debug=self.debug,
             )
 
             # 加载 COST 模板用于计时校准
@@ -198,9 +208,11 @@ class Runner:
             self.executor.resume()
             print("[脚本恢复]")
 
-    def _on_leak(self):
-        print("[漏怪检测] 检测到漏怪，停止当前脚本...")
+    def _on_leak(self, reason: str = "leak"):
+        label = "漏怪" if reason == "leak" else "失败"
+        print(f"[{label}检测] 检测到{label}，停止当前脚本...")
         self._leak_detected = True
+        self._leak_reason = reason
         self.executor.stop()
 
     async def _wait_for_game_start(self, cost_threshold: float = 0.8, interval: float = 0.01, bar_timeout: float = 10.0) -> float:
@@ -222,16 +234,55 @@ class Runner:
             should_stop=lambda: self._stopping,
         )
 
-    async def _monitor_leak_template(self, check_interval: float = 1.0):
-        """使用模板匹配后台监控漏怪。"""
+    async def _monitor_leak_template(
+        self,
+        check_interval: float = 1.0,
+        consecutive_required: int = 1,
+    ):
+        """使用模板匹配后台监控漏怪或失败提示。
+
+        通过较高的匹配阈值（默认 0.9）避免技能特效/UI 闪烁导致的误触发，
+        同时保留 consecutive_required 参数以便未来需要时开启连续帧确认。
+        """
+        consecutive_leak = 0
+        consecutive_failed = 0
         while self._running and not self.executor._stop_event.is_set():
             try:
                 is_leak = self.retry_handler.check_leak()
-                if self.debug:
-                    print(f"[漏怪监控] 本轮检测: {'触发' if is_leak else '未触发'}")
+                is_failed = self.retry_handler.check_failed()
+
                 if is_leak:
-                    self._on_leak()
-                    return
+                    consecutive_leak += 1
+                    consecutive_failed = 0
+                    if self.debug:
+                        print(
+                            f"[漏怪监控] 漏怪疑似触发，连续 {consecutive_leak}/{consecutive_required} 次"
+                        )
+                    if consecutive_leak >= consecutive_required:
+                        if self.debug:
+                            print("[漏怪监控] 本轮检测: 漏怪触发")
+                        self._on_leak(reason="leak")
+                        return
+                elif is_failed:
+                    consecutive_leak = 0
+                    consecutive_failed += 1
+                    if self.debug:
+                        print(
+                            f"[漏怪监控] 失败疑似触发，连续 {consecutive_failed}/{consecutive_required} 次"
+                        )
+                    if consecutive_failed >= consecutive_required:
+                        if self.debug:
+                            print("[漏怪监控] 本轮检测: 失败触发")
+                        self._on_leak(reason="failed")
+                        return
+                else:
+                    if consecutive_leak > 0 or consecutive_failed > 0:
+                        consecutive_leak = 0
+                        consecutive_failed = 0
+                        if self.debug:
+                            print("[漏怪监控] 连续计数重置")
+                    elif self.debug:
+                        print("[漏怪监控] 本轮检测: 未触发")
             except Exception as e:
                 print(f"[漏怪监控] 检测异常: {e}")
             await asyncio.sleep(check_interval)
@@ -247,6 +298,16 @@ class Runner:
             if self.debug:
                 print("[结算检测] retry 模板未加载，跳过检测")
             return False
+
+        # 统一模板通道格式为 BGR，避免与 ROI 通道不一致导致 OpenCV 异常
+        template = self.retry_template
+        if template.ndim == 3 and template.shape[2] == 4:
+            template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
+        elif template.ndim == 2:
+            template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+
+        if self.debug:
+            print(f"[结算检测] 模板形状: {template.shape}, dtype={template.dtype}")
 
         # ROI 基于 2560x1600，按当前窗口缩放
         win_left = self.capture.monitor.get("left", 0)
@@ -264,18 +325,26 @@ class Runner:
                 if roi.size == 0:
                     await asyncio.sleep(check_interval)
                     continue
+                # 统一 ROI 通道格式
+                if roi.ndim == 3 and roi.shape[2] == 4:
+                    roi = cv2.cvtColor(roi, cv2.COLOR_BGRA2BGR)
+                elif roi.ndim == 2:
+                    roi = cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
+
                 if (
-                    roi.shape[0] < self.retry_template.shape[0]
-                    or roi.shape[1] < self.retry_template.shape[1]
+                    roi.shape[0] < template.shape[0]
+                    or roi.shape[1] < template.shape[1]
                 ):
                     if self.debug:
                         print(
-                            f"[结算检测] ROI({roi_w}x{roi_h}) 小于模板"
-                            f"({self.retry_template.shape[1]}x{self.retry_template.shape[0]})"
+                            f"[结算检测] ROI({roi.shape[1]}x{roi.shape[0]}) 小于模板"
+                            f"({template.shape[1]}x{template.shape[0]})"
                         )
                     await asyncio.sleep(check_interval)
                     continue
-                result = cv2.matchTemplate(roi, self.retry_template, cv2.TM_CCOEFF_NORMED)
+                if self.debug:
+                    print(f"[结算检测] ROI形状: {roi.shape}, dtype={roi.dtype}")
+                result = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, _ = cv2.minMaxLoc(result)
                 if self.debug:
                     print(f"[结算检测] 匹配值={max_val:.3f}, 阈值={threshold}")
@@ -283,8 +352,9 @@ class Runner:
                     print(f"[结算检测] 检测到行动结束 (置信度: {max_val:.3f})")
                     return True
             except Exception as e:
-                if self.debug:
-                    print(f"[结算检测] 检测异常: {e}")
+                print(f"[结算检测] 检测异常: {e}")
+                import traceback
+                traceback.print_exc()
             await asyncio.sleep(check_interval)
         return False
 
@@ -309,10 +379,14 @@ class Runner:
         support_module: int = 1,
         direct_start: bool = False,
         challenge_mode: bool = False,
+        sand_table: bool = False,
         speed2x: bool = False,
     ):
         if self._abort:
             print("[紧急暂停] 初始化阶段已收到暂停指令，直接退出")
+            return
+        if challenge_mode and sand_table:
+            print("[紧急暂停] 突袭模式与沙盘推演不能同时开启")
             return
         self._abort = False
         self._stopping = False
@@ -336,6 +410,7 @@ class Runner:
                 support_module=support_module,
                 direct_start=direct_start,
                 challenge_mode=challenge_mode,
+                sand_table=sand_table,
                 should_stop=lambda: self._stopping,
             )
             if not ok:
@@ -361,6 +436,7 @@ class Runner:
         while self._running:
             self.executor._stop_event.clear()
             self._leak_detected = False
+            self._leak_reason = None
             # 每次重新开始都重置 executor 状态（pool、grid 等）
             self.executor.load_script(script, borrow_support=borrow_support, direct_start=direct_start)
 
@@ -427,15 +503,30 @@ class Runner:
             if not self._running:
                 break
 
-            # 如果检测到漏怪，执行重试流程
+            # 如果检测到漏怪或失败，执行对应重试流程
             if self._leak_detected:
-                # 非无限凸图模式下只补打一次，再次漏怪则停止
+                is_failed = self._leak_reason == "failed"
+                reason_text = "失败" if is_failed else "漏怪"
+                # 非无限凸图模式下只补打一次，再次触发则停止
                 if not loop_mode and self._leak_retried:
-                    print("[漏怪检测] 补打后再次漏怪，停止运行")
+                    print(f"[{reason_text}检测] 补打后再次{reason_text}，停止运行")
                     break
-                label = "[无限凸图]" if loop_mode else "[漏怪检测]"
-                print(f"{label} 检测到漏怪，执行重试...")
-                ok = await self.retry_handler.handle_leak_once(script.stage_code, should_stop=lambda: self._stopping)
+                label = "[无限凸图]" if loop_mode else f"[{reason_text}检测]"
+                print(f"{label} 检测到{reason_text}，执行重试...")
+                if is_failed:
+                    ok = await self.retry_handler.handle_failed_once(
+                        script.stage_code,
+                        should_stop=lambda: self._stopping,
+                        challenge_mode=challenge_mode,
+                        sand_table=sand_table,
+                    )
+                else:
+                    ok = await self.retry_handler.handle_leak_once(
+                        script.stage_code,
+                        should_stop=lambda: self._stopping,
+                        challenge_mode=challenge_mode,
+                        sand_table=sand_table,
+                    )
                 if not ok:
                     print(f"{label} 重试进入关卡失败，停止运行")
                     break
@@ -475,6 +566,7 @@ class Runner:
                     support_module=support_module,
                     direct_start=False,
                     challenge_mode=challenge_mode,
+                    sand_table=sand_table,
                     should_stop=lambda: self._stopping,
                 )
                 if not ok:
@@ -491,7 +583,7 @@ class Runner:
 
 async def main():
     if len(sys.argv) < 2:
-        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] [--borrow-support [--support-friend-index N] [--support-skill N] [--support-module N]] [--direct-start] [--challenge-mode] [--speed2x] [--cost-tag {normal|cc_25|cc_50|cc_75}] [--ocr-engine {auto|paddlex_onnx|transformers|paddle}] [--pause-key KEY] [--skill-key KEY] [--retreat-key KEY] [--speed-key KEY]")
+        print("用法: python main.py <script.json> [--loop] [--leak] [--debug] ...")
         sys.exit(1)
 
     loop_mode = "--loop" in sys.argv
@@ -500,13 +592,21 @@ async def main():
     borrow_support = "--borrow-support" in sys.argv
     direct_start = "--direct-start" in sys.argv
     challenge_mode = "--challenge-mode" in sys.argv
+    sand_table = "--sand-table" in sys.argv
     speed2x = "--speed2x" in sys.argv
+    if debug_mode:
+        print(f"[后端] main() 启动，参数: {sys.argv}")
+        print(f"[后端] debug={debug_mode}, loop={loop_mode}, leak={leak_mode}, challenge={challenge_mode}, sand_table={sand_table}")
     if challenge_mode and direct_start:
         print("错误：--challenge-mode（突袭模式）与 --direct-start（直接开始作战）不能同时开启")
         sys.exit(1)
 
     if loop_mode and direct_start:
         print("错误：--loop（无限凸图）与 --direct-start（直接开始作战）不能同时开启")
+        sys.exit(1)
+
+    if challenge_mode and sand_table:
+        print("错误：--challenge-mode（突袭模式）与 --sand-table（沙盘推演）不能同时开启")
         sys.exit(1)
 
     def _arg_int(flag: str, default: int) -> int:
@@ -565,6 +665,7 @@ async def main():
             support_module=support_module,
             direct_start=direct_start,
             challenge_mode=challenge_mode,
+            sand_table=sand_table,
             speed2x=speed2x,
         )
     finally:
@@ -576,4 +677,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print(f"[后端] 未捕获异常: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

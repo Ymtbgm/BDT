@@ -1031,9 +1031,15 @@ class EditorTab(QWidget):
         self._apply_edit()
         idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
         if idx is not None and idx > 0:
-            self.main_window.script.actions[idx], self.main_window.script.actions[idx - 1] = (
-                self.main_window.script.actions[idx - 1],
-                self.main_window.script.actions[idx],
+            actions = self.main_window.script.actions
+            cur_sf = self.main_window._ms_to_sf(actions[idx].time_ms)
+            prev_sf = self.main_window._ms_to_sf(actions[idx - 1].time_ms)
+            if cur_sf != prev_sf:
+                return
+            actions[idx], actions[idx - 1] = actions[idx - 1], actions[idx]
+            actions[idx].time_ms, actions[idx - 1].time_ms = (
+                actions[idx - 1].time_ms,
+                actions[idx].time_ms,
             )
             self._mark_dirty()
             self._refresh_table()
@@ -1044,9 +1050,15 @@ class EditorTab(QWidget):
         self._apply_edit()
         idx = self._table_row_to_action_idx(self.main_window.action_table.currentRow())
         if idx is not None and 0 <= idx < len(self.main_window.script.actions) - 1:
-            self.main_window.script.actions[idx], self.main_window.script.actions[idx + 1] = (
-                self.main_window.script.actions[idx + 1],
-                self.main_window.script.actions[idx],
+            actions = self.main_window.script.actions
+            cur_sf = self.main_window._ms_to_sf(actions[idx].time_ms)
+            next_sf = self.main_window._ms_to_sf(actions[idx + 1].time_ms)
+            if cur_sf != next_sf:
+                return
+            actions[idx], actions[idx + 1] = actions[idx + 1], actions[idx]
+            actions[idx].time_ms, actions[idx + 1].time_ms = (
+                actions[idx + 1].time_ms,
+                actions[idx].time_ms,
             )
             self._mark_dirty()
             self._refresh_table()

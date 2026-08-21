@@ -66,6 +66,68 @@ def draw_grid_positions(
     return canvas
 
 
+def draw_side_deploy_offsets(
+    image: np.ndarray,
+    tile_calc: TilePosCalculator,
+    raw_color: tuple = (255, 0, 0),
+    corrected_color: tuple = (0, 255, 0),
+) -> np.ndarray:
+    """绘制 side 视角下部署落点偏移效果。
+
+    红色/蓝色小圆点是 ``get_screen_pos`` 计算出的 tile 中心；
+    绿色十字是 tile 中心加上落点偏移向量后的位置，即游戏实际判定中心
+    （也是执行器应该点击的位置、角色实际落点）。
+    """
+    canvas = image.copy()
+    rows = tile_calc.grid_rows
+    cols = tile_calc.grid_cols
+    ox, oy = tile_calc.get_side_deploy_offset_vector()
+
+    for r in range(rows):
+        for c in range(cols):
+            raw_x, raw_y = tile_calc.get_screen_pos(r, c, side=True)
+            # 实际落点 = tile 中心 + 落点偏移向量
+            corr_x = int(round(raw_x + ox))
+            corr_y = int(round(raw_y + oy))
+
+            # 原始 tile 中心：小圆点
+            cv2.circle(canvas, (raw_x, raw_y), 4, raw_color, -1)
+            # 实际落点：绿色十字
+            cv2.drawMarker(
+                canvas,
+                (corr_x, corr_y),
+                corrected_color,
+                markerType=cv2.MARKER_CROSS,
+                markerSize=16,
+                thickness=2,
+            )
+            # 连线便于观察方向
+            cv2.line(canvas, (raw_x, raw_y), (corr_x, corr_y), corrected_color, 1)
+            # 标注行列号在实际落点旁边
+            label = f"{r},{c}"
+            cv2.putText(
+                canvas,
+                label,
+                (corr_x + 8, corr_y - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                corrected_color,
+                1,
+            )
+
+    info = f"side deploy offset vector=({ox:.2f}, {oy:.2f})  绿色=实际落点"
+    cv2.putText(
+        canvas,
+        info,
+        (10, 55),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+    return canvas
+
+
 def draw_tile_polygons(
     image: np.ndarray,
     tile_calc: TilePosCalculator,
@@ -178,6 +240,7 @@ def main():
     parser.add_argument("--stage-code", type=str, default=None, help="关卡 code，用于从 levels.json 加载精确 view 和尺寸")
     parser.add_argument("--stage-name", type=str, default=None, help="关卡 name，用于从 levels.json 加载精确 view 和尺寸")
     parser.add_argument("--side", action="store_true", help="同时绘制 side=True 的位置（蓝色）")
+    parser.add_argument("--side-offset", action="store_true", help="同时绘制 side 视角部署落点修正后的位置（绿色）")
     parser.add_argument("--polygons", action="store_true", help="同时绘制每个格子的投影四边形（半透明填充+边框）")
     parser.add_argument("--output", type=str, default=None, help="输出图片路径")
     parser.add_argument("--deploy-row", type=int, default=None, help="部署位置所在行（格子坐标）")
@@ -240,6 +303,8 @@ def main():
     canvas = draw_grid_positions(canvas, tile_calc, side=False, color=(0, 0, 255))
     if args.side:
         canvas = draw_grid_positions(canvas, tile_calc, side=True, color=(255, 0, 0))
+    if args.side_offset:
+        canvas = draw_side_deploy_offsets(canvas, tile_calc)
 
     if args.deploy_row is not None and args.deploy_col is not None:
         if not (0 <= args.deploy_row < rows and 0 <= args.deploy_col < cols):

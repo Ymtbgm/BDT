@@ -348,6 +348,36 @@ class TilePosCalculator:
             result.append(row)
         return result
 
+    def get_side_deploy_offset_vector(
+        self, offset_px_base: float = 20.0, base_h: int = 1600
+    ) -> Tuple[float, float]:
+        """返回 side 视角下部署落点相对 tile 中心的屏幕偏移向量。
+
+        side 视角中角色实际落点相对 tile 中心偏下一行。本方法返回从 tile 中心指向
+        实际落点的向量，可直接加到 tile 中心坐标上得到实际落点；长度按
+        ``offset_px_base`` 像素（按 ``base_h`` 基准高度缩放）。
+        """
+        matrix = self._get_transform_matrix(side=True)
+        origin = np.dot(matrix, np.array([0.0, 0.0, 0.0, 1.0]))
+        y_plus = np.dot(matrix, np.array([0.0, 1.0, 0.0, 1.0]))
+
+        def _to_screen(p):
+            return (
+                (1 + p[0] / p[3]) / 2 * self.screen_width,
+                (1 - p[1] / p[3]) / 2 * self.screen_height,
+            )
+
+        sx0, sy0 = _to_screen(origin)
+        sx1, sy1 = _to_screen(y_plus)
+        # world y+1 指向“上一行”（tile 中心方向），实际落点在其反方向，所以取负。
+        dx = sx0 - sx1
+        dy = sy0 - sy1
+        length = math.hypot(dx, dy)
+        scale = self.screen_height / base_h
+        if length == 0:
+            return 0.0, offset_px_base * scale
+        return dx / length * offset_px_base * scale, dy / length * offset_px_base * scale
+
     def get_tile_polygon(
         self, row: int, col: int, side: bool = False
     ) -> Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int], Tuple[int, int]]:

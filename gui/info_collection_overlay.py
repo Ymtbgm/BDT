@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from core.base.paths import GUI_TEMPLATE_DIR
-from PyQt6.QtCore import Qt, QPoint, pyqtSlot
+from gui._window_effects import set_window_topmost
+from PyQt6.QtCore import Qt, QPoint, pyqtSlot, QTimer
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsDropShadowEffect,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSizePolicy, QPushButton,
 )
 from PyQt6.QtGui import QFont, QPixmap, QColor
@@ -20,12 +21,14 @@ class InfoCollectionOverlay(QWidget):
         self._debug = debug
         self._timer_mode = False
 
+        # 置顶通过 Windows SetWindowPos(HWND_TOPMOST) 实现，避免与
+        # WA_TranslucentBackground + FramelessWindowHint 组合导致的不透明问题
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
+            | Qt.WindowType.Window
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 3)
@@ -40,20 +43,11 @@ class InfoCollectionOverlay(QWidget):
 
         self.info_box = QWidget()
         self.info_box.setStyleSheet(
-            "background-color: qradialgradient("
-            "cx:0.5, cy:0.5, radius:0.75, fx:0.5, fy:0.5, "
-            "stop:0 rgba(252, 252, 252, 245), "
-            "stop:0.75 rgba(255, 245, 245, 245), "
-            "stop:1 rgba(255, 225, 225, 245)); "
+            "background-color: #fff0f0; "
             "border: 3px solid #ff0000; "
             "border-radius: 20px; "
             "padding: 6px;"
         )
-        shadow = QGraphicsDropShadowEffect(self.info_box)
-        shadow.setBlurRadius(16)
-        shadow.setColor(QColor(255, 0, 0, 100))
-        shadow.setOffset(0, 4)
-        self.info_box.setGraphicsEffect(shadow)
 
         info_layout = QVBoxLayout(self.info_box)
         info_layout.setContentsMargins(6, 4, 6, 4)
@@ -87,7 +81,7 @@ class InfoCollectionOverlay(QWidget):
         self.script_tab.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
         self.script_tab.setStyleSheet(
             "color: #ff0000; "
-            "background-color: rgba(255, 255, 255, 230); "
+            "background-color: rgba(255, 255, 255, 255); "
             "border: 1px solid #ff0000; "
             "border-radius: 6px; "
             "padding: 2px 8px; "
@@ -125,7 +119,7 @@ class InfoCollectionOverlay(QWidget):
         self.start_button = QPushButton("开始录制")
         self.start_button.setFixedWidth(60)
         self.start_button.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 230); "
+            "background-color: rgba(255, 255, 255, 255); "
             "color: #ff0000; "
             "border: 1px solid #ff0000; "
             "border-radius: 6px; "
@@ -136,7 +130,7 @@ class InfoCollectionOverlay(QWidget):
         self.stop_button = QPushButton("结束录制")
         self.stop_button.setFixedWidth(60)
         self.stop_button.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 230); "
+            "background-color: rgba(255, 255, 255, 255); "
             "color: #ff0000; "
             "border: 1px solid #ff0000; "
             "border-radius: 6px; "
@@ -147,7 +141,7 @@ class InfoCollectionOverlay(QWidget):
         self.takeover_button = QPushButton("手动接管")
         self.takeover_button.setFixedWidth(70)
         self.takeover_button.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 230); "
+            "background-color: rgba(255, 255, 255, 255); "
             "color: #ff0000; "
             "border: 1px solid #ff0000; "
             "border-radius: 6px; "
@@ -166,6 +160,11 @@ class InfoCollectionOverlay(QWidget):
         self.info_box.setMinimumHeight(46)
         self.setFixedSize(320, 140)
         self.move(20, 20)
+
+        # Windows 可能会丢失 TOPMOST 状态，定期重新应用
+        self._topmost_timer = QTimer(self)
+        self._topmost_timer.timeout.connect(lambda: set_window_topmost(self))
+        self._topmost_timer.start(500)
 
         self._start_callback = None
         self._stop_callback = None
@@ -203,6 +202,7 @@ class InfoCollectionOverlay(QWidget):
         self.script_tab.setText(text)
         self.update()
 
+    @pyqtSlot(bool)
     def show_takeover_mode(self, show: bool = True):
         """切换为手动接管模式（隐藏开始/结束，显示手动接管）。"""
         self.start_button.setVisible(not show)
@@ -230,11 +230,6 @@ class InfoCollectionOverlay(QWidget):
         )
         label.setPixmap(scaled)
         label.setFixedSize(scaled.size())
-        wing_shadow = QGraphicsDropShadowEffect(label)
-        wing_shadow.setBlurRadius(12)
-        wing_shadow.setColor(QColor(255, 0, 0, 90))
-        wing_shadow.setOffset(0, 3)
-        label.setGraphicsEffect(wing_shadow)
         return label
 
     def _set_phase_font(self):
@@ -307,3 +302,12 @@ class InfoCollectionOverlay(QWidget):
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
         event.accept()
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        # Source 模式：用完全透明色直接替换目标像素
+        painter.setCompositionMode(QPainter.CompositionMode(1))
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+
+

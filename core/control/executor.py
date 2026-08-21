@@ -85,6 +85,18 @@ class ScriptExecutor:
             return self._speed2x_ref_ms + (time_ms - self._speed2x_ref_ms) * 2
         return time_ms
 
+    def _timer_time_ms(self, game_time_ms: int) -> int:
+        """将游戏内时间转换回计时器使用的压缩现实时间。
+
+        是 _game_time_ms 的逆运算，用于把"提前 N 毫秒游戏时间"换算成 wait_until 目标。
+        """
+        if self._timer_returns_game_time:
+            return game_time_ms
+        if self._speed2x_ref_ms is not None and game_time_ms > self._speed2x_ref_ms:
+            ref = self._speed2x_ref_ms
+            return int(ref + (game_time_ms - ref) / 2)
+        return game_time_ms
+
     def _frame_duration_ms(self, time_ms: Optional[int] = None) -> float:
         """返回当前校准表下的一帧时长（ms），用于跳帧后同步计时器。"""
         if self.cost_sync is not None and hasattr(self.cost_sync, "get_calibration"):
@@ -357,40 +369,63 @@ class ScriptExecutor:
         return True
 
     def _get_actual_target(self, action: OperatorAction) -> int:
-        """对最左三列的 RETREAT/SKILL 提前触发。"""
-        if action.action not in (ActionType.RETREAT, ActionType.SKILL):
+        """对 DEPLOY/RETREAT/SKILL 统一提前 2 帧（66ms 游戏时间）。
+
+        RETREAT/SKILL 命中最左三列时额外再提前 LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS。
+        费用条 MAX 后不再提前，直接按原时间执行。
+        所有提前量均按游戏时间计算，再逆映射回计时器时间。
+        """
+        if action.action not in (ActionType.DEPLOY, ActionType.RETREAT, ActionType.SKILL, ActionType.ADD_SUMMON):
             return action.time_ms
-        grid = action.grid
-        if not grid and action.operator_name and not action.is_object:
-            grid = self.pool.get_deployed_grid(action.operator_name)
-        if grid and grid[1] in (0, 1, 2):
-            if self._timer_returns_game_time:
-                advance = constants.LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS
-                advance_name = "LOADED_SCRIPT"
-            else:
-                advance = constants.LEFT_COLS_ADVANCE_MS
-                advance_name = "LEFT_COLS"
-            actual = max(0, action.time_ms - advance)
-            if self.debug:
-                print(
-                    f"[最左列提前] action={action.action.value} "
-                    f"grid={grid} timer_returns_game_time={self._timer_returns_game_time} "
-                    f"advance={advance_name}({advance}ms) "
-                    f"original={action.time_ms}ms actual={actual}ms"
-                )
-            return actual
-        return action.time_ms
+
+        # 检测费用条是否已满；若已满则本局后续动作不再提前/帧同步
+        if not self._cost_bar_maxed and self.cost_sync is not None and hasattr(self.cost_sync, "is_cost_max"):
+            try:
+                roi_gray = self.cost_sync.capture_roi_gray()
+                if roi_gray is not None and self.cost_sync.is_cost_max(roi_gray):
+                    self._cost_bar_maxed = True
+                    if self.debug:
+                        print("[执行器] 检测到费用条 MAX，本局后续动作不再提前暂停同步")
+            except Exception:
+                pass
+
+        if self._cost_bar_maxed:
+            return action.time_ms
+
+        game_time = self._game_time_ms(action.time_ms)
+        advance = constants.LOADED_SCRIPT_EARLY_TRIGGER_MS  # 66ms 游戏时间
+
+        # RETREAT/SKILL 最左三列额外提前
+        if action.action in (ActionType.RETREAT, ActionType.SKILL):
+            grid = action.grid
+            if not grid and action.operator_name and not action.is_object:
+                grid = self.pool.get_deployed_grid(action.operator_name)
+            if grid and grid[1] in (0, 1, 2):
+                advance += constants.LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS
+
+        early_game_time = max(0, game_time - advance)
+        actual = self._timer_time_ms(early_game_time)
+
+        if self.debug:
+            print(
+                f"[动作提前] action={action.action.value} "
+                f"grid={action.grid} cost_bar_maxed={self._cost_bar_maxed} "
+                f"advance={advance}ms(游戏时间) "
+                f"original={action.time_ms}ms actual={actual}ms"
+            )
+        return actual
 
     def _wait_target_ms(self, target_ms: int, action: OperatorAction) -> int:
-        """二倍速下将 wait_until 目标提前，抵消暂停键延迟导致的触发偏晚。"""
+        """二倍速下将 wait_until 目标提前，抵消暂停键延迟导致的触发偏晚。
+
+        通用的"提前 2 帧"逻辑已统一在 _get_actual_target 中处理，这里不再重复。
+        """
         if (
             self._speed2x_ref_ms is not None
             and action.action != ActionType.PAUSE
             and target_ms > self._speed2x_ref_ms
         ):
             return max(self._speed2x_ref_ms, target_ms - constants.TWOX_EARLY_TRIGGER_MS)
-        if self._timer_returns_game_time and not self._cost_bar_maxed:
-            return max(0, target_ms - constants.LOADED_SCRIPT_EARLY_TRIGGER_MS)
         return target_ms
 
     def _abs_pixel(self, row: int, col: int, side: bool = False):
@@ -443,40 +478,42 @@ class ScriptExecutor:
             digit_recognizer=self.digit_recognizer,
         )
 
-    async def _advance_frame_in_bullet_time(self):
-        """进入子弹时间后调用 p_and_esc_click 推进一帧，再退出子弹时间。
-
-        游戏实际前进了一帧，因此计时器也同步前进一帧，保证悬浮窗时间与
-        游戏画面保持一致。
-        """
-        pos0 = self.pool.get_bar_index_pos(0)
-        if pos0:
-            self.action.select_at(pos0[0], pos0[1])
-            await asyncio.sleep(1.0)
-        self.action.p_and_esc_click()
-        delta = self._skip_one_frame_and_measure()
-        self.timer.adjust(delta)
+    def _adjust_timer_by_game_delta(self, delta_game_ms: float):
+        """把游戏时间增量转换为计时器时间增量并调整计时器。"""
+        timer_now = self.timer.get_elapsed_ms()
+        game_now = self._game_time_ms(timer_now)
+        game_after = game_now + delta_game_ms
+        timer_after = self._timer_time_ms(game_after)
+        timer_delta = timer_after - timer_now
+        self.timer.adjust(timer_delta)
         self._notify_timer_adjusted()
-        print(f"{constants.TIMER_ADJUST_MARKER}:{delta}")
-        if pos0:
-            self.action.select_at(pos0[0], pos0[1])
-            await asyncio.sleep(1.0)
+        print(f"{constants.TIMER_ADJUST_MARKER}:{timer_delta}")
 
     async def _sync_to_frame(self, time_ms: int):
-        """基于费用条白像素进行帧同步，仅当当前帧落后于目标帧（偏早）时跳帧，最多跳 3 帧。"""
-        if self.cost_sync is None:
+        """基于费用条白像素进行帧同步，仅当当前帧落后于目标帧（偏早）时跳帧，最多跳 3 帧。
+
+        在子弹时间（划火柴）状态下调用 p_and_esc_click 前进一帧；差几帧调用几次。
+        费用条 MAX 后帧号不再循环，同步会引入误差，直接跳过。
+        """
+        if self.cost_sync is None or self._cost_bar_maxed:
             return
 
         game_time_ms = self._game_time_ms(time_ms)
         target_frame = self.cost_sync.target_frame_index(game_time_ms)
 
+        # DEPLOY：先选中部署栏最右侧干员进入子弹时间
+        pos0 = self.pool.get_bar_index_pos(0)
+        if pos0:
+            self.action.select_at(pos0[0], pos0[1])
+            await asyncio.sleep(1.0)
+
         for attempt in range(3):
             count = self.cost_sync.white_pixel_count()
             if count is None:
-                return
+                break
             current_frame = self.cost_sync.current_frame(count, game_time_ms)
             if current_frame is None:
-                return
+                break
             behind = self._frames_behind(current_frame, target_frame, time_ms)
             ahead = self._frames_behind(target_frame, current_frame, time_ms)
             if self.debug or self.cost_sync.debug:
@@ -492,28 +529,34 @@ class ScriptExecutor:
                         f"[费用条同步] 已匹配目标帧，最终对齐后 timer="
                         f"{self.timer.get_elapsed_ms():.1f}ms"
                     )
-                return
+                break
             if behind <= 3:
-                await self._advance_frame_in_bullet_time()
-                if self.cost_sync.debug:
-                    print("[费用条同步] 跳 1 帧")
+                # 划火柴内调用 p_and_esc_click，子弹时间下约前进 1 帧
+                self.action.p_and_esc_click()
+                self._adjust_timer_by_game_delta(self._frame_duration_ms(time_ms))
+                if self.debug or self.cost_sync.debug:
+                    print("[费用条同步] p_and_esc_click 跳 1 帧")
                 continue
             if ahead <= 3:
-                # 当前帧比目标帧稍早（循环意义下 ahead 小），直接对齐计时器
                 self._resync_timer_to_cost_bar(time_ms)
                 if self.debug or self.cost_sync.debug:
                     print(
                         f"[费用条同步] 当前帧超前 {ahead} 帧，直接对齐 timer="
                         f"{self.timer.get_elapsed_ms():.1f}ms"
                     )
-                return
+                break
             if self.debug or self.cost_sync.debug:
                 print("[费用条同步] 偏晚或落后超过3帧，不跳帧")
-            return
+            break
 
     async def _sync_to_frame_after_select(self, time_ms: int):
-        """在已选中干员（子弹时间）后进行帧同步，仅偏早时跳帧，最多跳 3 帧。"""
-        if self.cost_sync is None:
+        """在已选中干员（子弹时间）后进行帧同步，仅偏早时跳帧，最多跳 3 帧。
+
+        调用方已选中目标干员进入划火柴，这里直接在划火柴内调用 p_and_esc_click
+        前进一帧；差几帧调用几次。
+        费用条 MAX 后帧号不再循环，同步会引入误差，直接跳过。
+        """
+        if self.cost_sync is None or self._cost_bar_maxed:
             return
 
         game_time_ms = self._game_time_ms(time_ms)
@@ -522,10 +565,10 @@ class ScriptExecutor:
         for attempt in range(3):
             count = self.cost_sync.white_pixel_count()
             if count is None:
-                return
+                break
             current_frame = self.cost_sync.current_frame(count, game_time_ms)
             if current_frame is None:
-                return
+                break
             behind = self._frames_behind(current_frame, target_frame, time_ms)
             ahead = self._frames_behind(target_frame, current_frame, time_ms)
             if self.debug or self.cost_sync.debug:
@@ -541,17 +584,12 @@ class ScriptExecutor:
                         f"[费用条同步-选中后] 已匹配目标帧，最终对齐后 timer="
                         f"{self.timer.get_elapsed_ms():.1f}ms"
                     )
-                return
+                break
             if behind <= 3:
-                delta = self._skip_one_frame_and_measure(time_ms)
-                self.timer.adjust(delta)
-                self._notify_timer_adjusted()
-                print(f"{constants.TIMER_ADJUST_MARKER}:{delta}")
+                self.action.p_and_esc_click()
+                self._adjust_timer_by_game_delta(self._frame_duration_ms(time_ms))
                 if self.debug or self.cost_sync.debug:
-                    print(
-                        f"[费用条同步-选中后] 跳 1 帧，timer="
-                        f"{self.timer.get_elapsed_ms():.1f}ms"
-                    )
+                    print("[费用条同步-选中后] p_and_esc_click 跳 1 帧")
                 continue
             if ahead <= 3:
                 self._resync_timer_to_cost_bar(time_ms)
@@ -560,10 +598,10 @@ class ScriptExecutor:
                         f"[费用条同步-选中后] 当前帧超前 {ahead} 帧，直接对齐 timer="
                         f"{self.timer.get_elapsed_ms():.1f}ms"
                     )
-                return
+                break
             if self.debug or self.cost_sync.debug:
                 print("[费用条同步-选中后] 偏晚或落后超过3帧，不跳帧")
-            return
+            break
 
     async def _execute_action_core(self, action: OperatorAction):
         """仅执行操作逻辑，不处理暂停/恢复外壳。"""
@@ -579,6 +617,11 @@ class ScriptExecutor:
             if self._stop_event.is_set():
                 return
             to_x, to_y = self._abs_pixel(action.grid[0], action.grid[1], side=True)
+            # side 视角下游戏的实际判定中心比 tile 中心偏下一行，
+            # 执行器需要点击实际判定中心（tile 中心 + 落点偏移向量）。
+            ox, oy = self.grid.get_side_deploy_offset_vector()
+            to_x += int(round(ox))
+            to_y += int(round(oy))
             from_pos = self.pool.get_deploy_pos(action.operator_name)
             if from_pos is None:
                 raise RuntimeError(f"干员 {action.operator_name} 当前不在部署栏可用列表中")
@@ -1012,19 +1055,23 @@ class ScriptExecutor:
                     await self._execute_action_core(action)
                     if idx < len(group) - 1:
                         await asyncio.sleep(1.0)
-                # 不是最后一组时推进一帧（33ms），保持暂停状态
+                # 不是最后一组时，根据两组目标时间差决定是否推进以及推进多少帧
                 if gi < len(groups) - 1:
-                    pos0 = self.pool.get_bar_index_pos(0)
-                    if pos0:
-                        self.action.select_at(pos0[0], pos0[1])
-                        await asyncio.sleep(1.0)
-                    delta = self._skip_one_frame_and_measure(groups[0][0].time_ms)
-                    self.timer.adjust(delta)
-                    self._notify_timer_adjusted()
-                    print(f"{constants.TIMER_ADJUST_MARKER}:{delta}")
-                    if pos0:
-                        self.action.select_at(pos0[0], pos0[1])
-                        await asyncio.sleep(1.0)
+                    current_time = groups[gi][0].time_ms
+                    next_time = groups[gi + 1][0].time_ms
+                    frame_duration = self._frame_duration_ms(groups[0][0].time_ms)
+                    frames_to_advance = max(0, int((next_time - current_time) / frame_duration))
+                    if frames_to_advance > 0:
+                        pos0 = self.pool.get_bar_index_pos(0)
+                        if pos0:
+                            self.action.select_at(pos0[0], pos0[1])
+                            await asyncio.sleep(1.0)
+                        for _ in range(frames_to_advance):
+                            self.action.p_and_esc_click()
+                            self._adjust_timer_by_game_delta(frame_duration)
+                        if pos0:
+                            self.action.select_at(pos0[0], pos0[1])
+                            await asyncio.sleep(1.0)
             if self.debug:
                 print(f"[动作计时-聚类] 执行核心后: 目标={groups[0][0].time_ms}ms, {self._fmt_time()}")
         finally:

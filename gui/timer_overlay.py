@@ -1,11 +1,11 @@
 from pathlib import Path
 
 from core.base.paths import GUI_TEMPLATE_DIR
+from gui._window_effects import set_window_topmost
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
-    QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QColor
 
 
@@ -14,19 +14,22 @@ class TimerOverlay(QWidget):
 
     _WING_HEIGHT = 35
 
-    def __init__(self, on_pause_clicked=None, on_reset_clicked=None, debug=False, parent=None):
+    def __init__(self, on_pause_clicked=None, on_reset_clicked=None, on_stop_clicked=None, debug=False, parent=None):
         super().__init__(parent)
         self._drag_pos: QPoint | None = None
         self._debug = debug
         self._on_pause_clicked = on_pause_clicked
         self._on_reset_clicked = on_reset_clicked
+        self._on_stop_clicked = on_stop_clicked
 
+        # 置顶通过 Windows SetWindowPos(HWND_TOPMOST) 实现，避免与
+        # WA_TranslucentBackground + FramelessWindowHint 组合导致的不透明问题
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
+            | Qt.WindowType.Window
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -43,20 +46,11 @@ class TimerOverlay(QWidget):
         # 信息面板：圆角矩形，内部显示秒帧与 rate/running
         self.info_box = QWidget()
         self.info_box.setStyleSheet(
-            "background-color: qradialgradient("
-            "cx:0.5, cy:0.5, radius:0.75, fx:0.5, fy:0.5, "
-            "stop:0 rgba(252, 252, 252, 245), "
-            "stop:0.75 rgba(255, 245, 245, 245), "
-            "stop:1 rgba(255, 225, 225, 245)); "
+            "background-color: #fff0f0; "
             "border: 3px solid #ff0000; "
             "border-radius: 20px; "
             "padding: 6px;"
         )
-        shadow = QGraphicsDropShadowEffect(self.info_box)
-        shadow.setBlurRadius(16)
-        shadow.setColor(QColor(255, 0, 0, 100))
-        shadow.setOffset(0, 4)
-        self.info_box.setGraphicsEffect(shadow)
         info_layout = QVBoxLayout(self.info_box)
         info_layout.setContentsMargins(6, 4, 6, 4)
         info_layout.setSpacing(0)
@@ -90,7 +84,7 @@ class TimerOverlay(QWidget):
         self.btn_pause = QPushButton("暂停")
         self.btn_pause.setFixedWidth(60)
         self.btn_pause.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 230); "
+            "background-color: rgba(255, 255, 255, 255); "
             "color: #ff0000; "
             "border: 1px solid #ff0000; "
             "border-radius: 6px; "
@@ -103,7 +97,7 @@ class TimerOverlay(QWidget):
         self.btn_reset = QPushButton("重置")
         self.btn_reset.setFixedWidth(60)
         self.btn_reset.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 230); "
+            "background-color: rgba(255, 255, 255, 255); "
             "color: #ff0000; "
             "border: 1px solid #ff0000; "
             "border-radius: 6px; "
@@ -113,13 +107,31 @@ class TimerOverlay(QWidget):
         self.btn_reset.clicked.connect(self._handle_reset_click)
         btn_layout.addWidget(self.btn_reset)
 
+        self.btn_close = QPushButton("关闭")
+        self.btn_close.setFixedWidth(60)
+        self.btn_close.setStyleSheet(
+            "background-color: rgba(255, 255, 255, 255); "
+            "color: #ff0000; "
+            "border: 1px solid #ff0000; "
+            "border-radius: 6px; "
+            "padding: 2px;"
+        )
+        self.btn_close.setFont(QFont("Microsoft YaHei", 10))
+        self.btn_close.clicked.connect(self._handle_close_click)
+        btn_layout.addWidget(self.btn_close)
+
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
         self.info_box.setFixedWidth(170)
-        height = 110 if debug else 80
+        height = 130 if debug else 100
         self.setFixedSize(320, height)
         self.move(10, 15)
+
+        # Windows 可能会丢失 TOPMOST 状态，定期重新应用
+        self._topmost_timer = QTimer(self)
+        self._topmost_timer.timeout.connect(lambda: set_window_topmost(self))
+        self._topmost_timer.start(500)
 
     def _create_wing_label(self, filename: str) -> QLabel:
         """加载翅膀图片（优先使用已裁剪版本），缩放后返回 QLabel。"""
@@ -138,11 +150,6 @@ class TimerOverlay(QWidget):
         )
         label.setPixmap(scaled)
         label.setFixedSize(scaled.size())
-        wing_shadow = QGraphicsDropShadowEffect(label)
-        wing_shadow.setBlurRadius(12)
-        wing_shadow.setColor(QColor(255, 0, 0, 90))
-        wing_shadow.setOffset(0, 3)
-        label.setGraphicsEffect(wing_shadow)
         return label
 
     def _handle_pause_click(self):
@@ -152,6 +159,10 @@ class TimerOverlay(QWidget):
     def _handle_reset_click(self):
         if self._on_reset_clicked:
             self._on_reset_clicked()
+
+    def _handle_close_click(self):
+        if self._on_stop_clicked:
+            self._on_stop_clicked()
 
     def update_time(self, elapsed_ms: float, seconds: int, frame: int, rate: float, paused: bool):
         self.time_label.setText(f"{seconds}s {frame:02d}f")
@@ -175,3 +186,12 @@ class TimerOverlay(QWidget):
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
         event.accept()
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        # Source 模式：用完全透明色直接替换目标像素
+        painter.setCompositionMode(QPainter.CompositionMode(1))
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+
+

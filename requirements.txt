@@ -1,6 +1,24 @@
+# Blood Demon Toolbox (BDT) Python dependencies
+#
+# NOTE:
+#   torch / torchvision 默认会从 PyPI 安装 CUDA 版本（体积很大）。
+#   本项目在 YOLO 数量角标检测、头像匹配等模块中使用 torch，但日常以 CPU 推理为主，
+#   推荐先单独安装 CPU 版 torch（体积小、启动快）：
+#
+#       pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+#   然后再安装本文件其余依赖：
+#
+#       pip install -r requirements.txt
+#
+#   若确实需要 GPU 推理，请去掉 --index-url 参数，安装与本地 CUDA 对应的 torch 版本。
+
 pydantic>=2.0
 mss>=9.0
-opencv-python>=4.8
+# PaddleOCR / PaddleX 依赖 opencv-contrib-python，且与 opencv-python 包冲突
+# （两者共享 cv2 命名空间，同时安装会导致模板匹配、截图等视觉功能异常）。
+# 这里使用 opencv-contrib-python，它已包含 opencv-python 的全部功能。
+opencv-contrib-python>=4.8,<5.0
 numpy>=1.24
 paddleocr>=2.7
 paddlepaddle
@@ -12,3 +30,13 @@ PyQt6>=6.5
 onnxruntime>=1.16
 onnx>=1.14
 requests>=2.31
+
+# YOLO 数量角标检测（core/vision/yolo_detector.py）
+ultralytics>=8.0
+
+# 头像特征匹配（core/vision/avatar_matcher.py）
+torch>=2.0
+torchvision>=0.15
+
+# PaddleOCR pp_ocrv5 系列模型后端依赖
+transformers>=4.30

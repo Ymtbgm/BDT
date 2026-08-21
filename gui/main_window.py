@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
     btn_rec_load_script: QPushButton
     btn_rec_clear_script: QPushButton
     rec_chk_support_op: QCheckBox
+    rec_takeover_hotkey: QLineEdit
     combo_rec_debug: CheckedComboBox
     rec_initial_operator_count: QSpinBox
     rec_initial_item_count: QSpinBox
@@ -308,10 +309,12 @@ class MainWindow(QMainWindow):
             "debug": self.chk_debug.isChecked(),
             "direct_start": self.chk_direct_start.isChecked(),
             "challenge_mode": self.chk_challenge_mode.isChecked(),
+            "sand_table": self.chk_sand_table.isChecked(),
             "speed2x": self.chk_speed2x.isChecked(),
             "cost_tag": self.combo_cost_tag.currentData() or "",
             "rec_debug_keys": self.combo_rec_debug.checked_data(),
             "rec_support_op": self.rec_chk_support_op.isChecked(),
+            "rec_takeover_hotkey": self.rec_takeover_hotkey.text().strip().upper() or "F9",
             "rec_stage_code": self.rec_stage_code.text(),
             "rec_loaded_script_path": self.rec_loaded_script_path.text(),
             "rec_cost_tag": self.rec_cost_tag.currentData() or "",
@@ -374,7 +377,13 @@ class MainWindow(QMainWindow):
         self.chk_leak.setChecked(config.get("leak", False))
         self.chk_debug.setChecked(config.get("debug", False))
         self.chk_direct_start.setChecked(direct_start)
-        self.chk_challenge_mode.setChecked(config.get("challenge_mode", False))
+        challenge_mode = config.get("challenge_mode", False)
+        sand_table = config.get("sand_table", False)
+        # 突袭与沙盘推演互斥，同时开启时优先关闭沙盘推演
+        if challenge_mode and sand_table:
+            sand_table = False
+        self.chk_challenge_mode.setChecked(challenge_mode)
+        self.chk_sand_table.setChecked(sand_table)
         self.chk_speed2x.setChecked(config.get("speed2x", False))
         cost_tag = config.get("cost_tag", "")
         if cost_tag:
@@ -395,6 +404,7 @@ class MainWindow(QMainWindow):
         if legacy_keys:
             self.combo_rec_debug.set_checked_data(legacy_keys)
         self.rec_chk_support_op.setChecked(config.get("rec_support_op", False))
+        self.rec_takeover_hotkey.setText(config.get("rec_takeover_hotkey", "F9"))
         self.rec_stage_code.setText(config.get("rec_stage_code", ""))
         self.rec_loaded_script_path.setText(config.get("rec_loaded_script_path", ""))
         rec_cost_tag = config.get("rec_cost_tag", "")

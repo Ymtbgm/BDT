@@ -11,8 +11,10 @@ class StageSelector:
     # 相对于 2560x1600 客户区的比例坐标
     # 第1步：点击关卡名 -> 第2步：点击"开始行动" -> 第3步：点击"开始"
     START_ACTION_RATIO: Tuple[float, float] = (1953 / 2560, 1487 / 1600)
+    START_SAND_TABLE_ACTION_RATIO: Tuple[float, float] = (2325 / 2560, 1495 / 1600)
     START_CONFIRM_RATIO: Tuple[float, float] = (2117 / 2560, 1040 / 1600)
     CHALLENGE_MODE_RATIO: Tuple[float, float] = (1565 / 2560, 1478 / 1600)
+    SAND_TABLE_RATIO: Tuple[float, float] = (2025 / 2560, 353 / 1600)
 
     # 助战干员选择相关比例坐标（基于 2560x1600）
     SUPPORT_BUTTON_RATIO: Tuple[float, float] = (2127 / 2560, 527 / 1600)
@@ -113,12 +115,15 @@ class StageSelector:
         support_module: int = 1,
         direct_start: bool = False,
         challenge_mode: bool = False,
+        sand_table: bool = False,
         should_stop=None,
     ) -> bool:
-        """完整流程：查找关卡 -> 点击 -> [可选突袭切换] -> [可选助战选择] -> 点击确认开始。
+        """完整流程：查找关卡 -> 点击 -> [可选突袭/沙盘推演切换] -> [可选助战选择] -> 点击确认开始。
 
         若传入 direct_start=True，则跳过 OCR 查找关卡和"开始行动"点击，
         直接等待 2 秒后点击"确认开始"，适用于用户已手动进入准备界面的场景。
+
+        challenge_mode 与 sand_table 不能同时开启。
 
         should_stop: 可选的无参可调用对象，返回 True 时立即终止流程并返回 False。
         """
@@ -126,6 +131,10 @@ class StageSelector:
 
         def _check_stop() -> bool:
             return should_stop is not None and should_stop()
+
+        if challenge_mode and sand_table:
+            print("[关卡选择] 错误：突袭模式与沙盘推演不能同时开启")
+            return False
 
         if direct_start:
             print("[关卡选择] 直接开始作战模式，跳过 OCR 与开始行动点击")
@@ -145,7 +154,7 @@ class StageSelector:
             return False
         print(f"[关卡选择] 已点击关卡: {stage_code}")
 
-        # 1.5 突袭模式：点击切换按钮
+        # 1.5 突袭模式 / 沙盘推演：点击切换按钮
         if challenge_mode:
             await asyncio.sleep(2.0)
             if _check_stop():
@@ -154,15 +163,27 @@ class StageSelector:
             pydirectinput.moveTo(x, y)
             pydirectinput.click(button='left')
             print("[关卡选择] 突袭模式，已点击切换按钮")
+        elif sand_table:
+            await asyncio.sleep(2.0)
+            if _check_stop():
+                return False
+            x, y = self._ratio_to_pixel(*self.SAND_TABLE_RATIO)
+            pydirectinput.moveTo(x, y)
+            pydirectinput.click(button='left')
+            print("[关卡选择] 沙盘推演模式，已点击切换按钮")
 
-        # 2. 等待并点击"开始行动"
+        # 2. 等待并点击"开始行动" / "开始推演"
         await asyncio.sleep(2.0)
         if _check_stop():
             return False
-        x, y = self._ratio_to_pixel(*self.START_ACTION_RATIO)
+        if sand_table:
+            x, y = self._ratio_to_pixel(*self.START_SAND_TABLE_ACTION_RATIO)
+            print("[关卡选择] 已点击开始推演")
+        else:
+            x, y = self._ratio_to_pixel(*self.START_ACTION_RATIO)
+            print("[关卡选择] 已点击开始行动")
         pydirectinput.moveTo(x, y)
         pydirectinput.click(button='left')
-        print("[关卡选择] 已点击开始行动")
 
         if borrow_support:
             # 点击"借用干员"按钮

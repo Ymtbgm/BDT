@@ -80,6 +80,7 @@ class ExecTab(QWidget):
         super().__init__()
         self.main_window = main_window
         self._init_error_shown = False
+        self._user_stopped = False
         self._last_lines: list[str] = []
         self._build_ui()
 
@@ -105,15 +106,19 @@ class ExecTab(QWidget):
         self.main_window.chk_debug = QCheckBox("Debug (--debug)")
         self.main_window.chk_direct_start = QCheckBox("直接开始作战 (--direct-start)")
         self.main_window.chk_challenge_mode = QCheckBox("突袭模式")
+        self.main_window.chk_sand_table = QCheckBox("沙盘推演")
         self.main_window.chk_speed2x = QCheckBox("二倍速凸图")
         self.main_window.chk_loop.stateChanged.connect(self._on_loop_changed)
         self.main_window.chk_direct_start.stateChanged.connect(self._on_direct_start_changed)
         self.main_window.chk_challenge_mode.stateChanged.connect(self._on_challenge_mode_changed)
+        self.main_window.chk_sand_table.stateChanged.connect(self._on_sand_table_changed)
+        self.main_window.chk_debug.stateChanged.connect(self.main_window._save_config)
         params_layout.addWidget(self.main_window.chk_loop)
         params_layout.addWidget(self.main_window.chk_leak)
         params_layout.addWidget(self.main_window.chk_debug)
         params_layout.addWidget(self.main_window.chk_direct_start)
         params_layout.addWidget(self.main_window.chk_challenge_mode)
+        params_layout.addWidget(self.main_window.chk_sand_table)
         params_layout.addWidget(self.main_window.chk_speed2x)
         params_layout.addStretch()
         layout.addWidget(params_group)
@@ -353,9 +358,12 @@ class ExecTab(QWidget):
             self.main_window.chk_loop.setEnabled(False)
             self.main_window.chk_challenge_mode.setChecked(False)
             self.main_window.chk_challenge_mode.setEnabled(False)
+            self.main_window.chk_sand_table.setChecked(False)
+            self.main_window.chk_sand_table.setEnabled(False)
         else:
             self.main_window.chk_loop.setEnabled(True)
             self.main_window.chk_challenge_mode.setEnabled(True)
+            self.main_window.chk_sand_table.setEnabled(True)
         self.main_window.chk_borrow_support.setEnabled(not checked)
         self._on_borrow_support_changed(self.main_window.chk_borrow_support.checkState())
 
@@ -367,8 +375,27 @@ class ExecTab(QWidget):
         if checked:
             self.main_window.chk_direct_start.setChecked(False)
             self.main_window.chk_direct_start.setEnabled(False)
+            self.main_window.chk_sand_table.setChecked(False)
+            self.main_window.chk_sand_table.setEnabled(False)
         else:
             self.main_window.chk_direct_start.setEnabled(True)
+            if not self.main_window.chk_sand_table.isChecked():
+                self.main_window.chk_sand_table.setEnabled(True)
+
+    def _on_sand_table_changed(self, state):
+        if isinstance(state, Qt.CheckState):
+            checked = state == Qt.CheckState.Checked
+        else:
+            checked = state == Qt.CheckState.Checked.value
+        if checked:
+            self.main_window.chk_direct_start.setChecked(False)
+            self.main_window.chk_direct_start.setEnabled(False)
+            self.main_window.chk_challenge_mode.setChecked(False)
+            self.main_window.chk_challenge_mode.setEnabled(False)
+        else:
+            self.main_window.chk_direct_start.setEnabled(True)
+            if not self.main_window.chk_challenge_mode.isChecked():
+                self.main_window.chk_challenge_mode.setEnabled(True)
 
     def _on_game_key_changed(self, text):
         game_keys = self.main_window._game_key_set()
@@ -433,6 +460,7 @@ class ExecTab(QWidget):
 
         self.main_window._save_config()
         self._init_error_shown = False
+        self._user_stopped = False
         self._last_lines.clear()
 
         args = ["--run-script", script_path]
@@ -446,6 +474,8 @@ class ExecTab(QWidget):
             args.append("--direct-start")
         if self.main_window.chk_challenge_mode.isChecked():
             args.append("--challenge-mode")
+        if self.main_window.chk_sand_table.isChecked():
+            args.append("--sand-table")
         if self.main_window.chk_speed2x.isChecked():
             args.append("--speed2x")
         cost_tag = self.main_window.combo_cost_tag.currentData()
@@ -480,6 +510,8 @@ class ExecTab(QWidget):
         self.main_window.process.errorOccurred.connect(self._on_process_error)
 
         self.main_window.log_text.clear()
+        cmd_preview = " ".join([sys.executable] + (["entry.py"] if not getattr(sys, "frozen", False) else []) + args)
+        self.main_window.log_text.append(f"[系统] 启动参数: {cmd_preview}")
         if self.main_window.chk_direct_start.isChecked():
             self.main_window.log_text.append("[系统] 直接开始作战模式，脚本初始化中...")
         else:
@@ -555,7 +587,12 @@ class ExecTab(QWidget):
             self.main_window.log_text.append(f"[stderr] {data.strip()}")
 
     def _on_process_error(self, error):
-        """QProcess 自身启动失败时弹窗提示（如 exe 缺失、权限不足等）。"""
+        """QProcess 自身启动失败时弹窗提示（如 exe 缺失、权限不足等）。
+
+        用户手动停止时强制 kill 也可能触发 Crashed，此时跳过弹窗。
+        """
+        if self._user_stopped:
+            return
         error_text = self.main_window.process.errorString()
         QMessageBox.critical(
             self.main_window,
@@ -576,7 +613,7 @@ class ExecTab(QWidget):
         if self.main_window._region_timer is not None and self.main_window._region_timer.is_running():
             self.main_window._region_timer.reconnect_hotkey()
 
-        if exit_code != 0 and not self._init_error_shown:
+        if exit_code != 0 and not self._init_error_shown and not self._user_stopped:
             detail = "\n".join(self._last_lines[-30:])
             QMessageBox.critical(
                 self.main_window,
@@ -589,6 +626,7 @@ class ExecTab(QWidget):
         self._last_lines.clear()
 
     def _stop_script(self):
+        self._user_stopped = True
         if self.main_window.process and self.main_window.process.state() != QProcess.ProcessState.NotRunning:
             self.main_window.process.terminate()
             QTimer.singleShot(3000, self._force_kill)

@@ -75,3 +75,15 @@ class GridMapper:
 
     def get_grid_size(self) -> Tuple[float, float]:
         return self._cell_w, self._cell_h
+
+    def get_side_deploy_offset_vector(
+        self, offset_px_base: float = 20.0, base_h: int = 1600
+    ) -> Tuple[float, float]:
+        """返回 side 视角下部署落点相对 tile 中心的屏幕偏移向量。
+
+        见 ``TilePosCalculator.get_side_deploy_offset_vector``。若未启用精确投影则
+        回退到纯屏幕 y 轴负方向。
+        """
+        if self._precise_calc is not None:
+            return self._precise_calc.get_side_deploy_offset_vector(offset_px_base, base_h)
+        return 0.0, -offset_px_base * (self.window_height / base_h)

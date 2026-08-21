@@ -1,6 +1,11 @@
 import action
 from core.capture.capture import WindowCapture
 from core.game_state.region_state_timer import RegionStateTimer
+from gui._window_effects import (
+    remove_dwm_glass_border,
+    set_window_topmost,
+    set_tool_window_style,
+)
 from gui.timer_overlay import TimerOverlay
 
 from PyQt6.QtWidgets import (
@@ -109,11 +114,22 @@ class TimerTab(QWidget):
         return matchstick_hotkeys
 
     def _start_region_timer(self):
-        if self.main_window._region_timer is not None and self.main_window._region_timer.is_running():
-            return
+        if self.main_window._region_timer is not None:
+            if self.main_window._region_timer.is_running():
+                # 已经在运行，只需确保悬浮窗显示并置顶
+                if self.main_window._timer_overlay is not None:
+                    self.main_window._timer_overlay.show()
+                    set_window_topmost(self.main_window._timer_overlay)
+                return
+            # 残留未运行的计时器，先清理避免状态混乱
+            self.main_window._region_timer.stop()
+            self.main_window._region_timer = None
 
         try:
-            self.main_window._timer_capture = WindowCapture(backend="mss")
+            self.main_window._timer_capture = WindowCapture(
+                backend="mss",
+                debug=self.main_window.chk_timer_debug.isChecked(),
+            )
             matchstick_hotkeys = self._build_matchstick_hotkeys()
 
             cost_tag = self.main_window.combo_timer_cost_tag.currentData() or None
@@ -134,10 +150,15 @@ class TimerTab(QWidget):
         self.main_window._timer_overlay = TimerOverlay(
             on_pause_clicked=self._toggle_timer_pause,
             on_reset_clicked=self._reset_region_timer,
+            on_stop_clicked=self._stop_region_timer,
             debug=self.main_window.chk_timer_debug.isChecked(),
         )
         self.main_window._timer_overlay.show()
-        self.main_window.showMinimized()
+        remove_dwm_glass_border(self.main_window._timer_overlay)
+        set_tool_window_style(self.main_window._timer_overlay)
+        set_window_topmost(self.main_window._timer_overlay)
+        # 延迟最小化主窗口，避免刚创建的悬浮窗受主窗口状态切换影响而无法立即显示
+        QTimer.singleShot(100, self.main_window.showMinimized)
 
         self.main_window._timer_qtimer = QTimer(self.main_window)
         self.main_window._timer_qtimer.setTimerType(Qt.TimerType.PreciseTimer)

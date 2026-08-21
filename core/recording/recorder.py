@@ -239,8 +239,9 @@ class ActionRecorder:
     _TIMEOUT_DEPLOY_DIR = 2.0
     _TIMEOUT_UNIT_SELECT = 2.0
 
-    # side 视角下，部署落点整体偏下一行，判定前将坐标上移 25px
-    _SIDE_GRID_Y_OFFSET = -25
+    # side 视角下，部署落点相对 tile 中心偏下一行；
+    # 判定前把点沿实际落点方向的反方向移回 tile 中心（按 1600 基准缩放）。
+    _SIDE_GRID_OFFSET_MAG_PX = 20
 
     def __init__(
         self,
@@ -256,6 +257,7 @@ class ActionRecorder:
         initial_item_count: int = 0,
         support_count: int = 0,
         pause_key: str = "space",
+        takeover_hotkey: str = "F9",
         matchstick_hotkeys: Optional[dict] = None,
         cost_bar_calibration_name: Optional[str] = None,
         ocr: Optional[OCREngine] = None,
@@ -277,6 +279,8 @@ class ActionRecorder:
         self.debug_screenshot = debug_screenshot
         self.debug_loaded_script = debug_loaded_script or debug
         self._pause_key = pause_key
+        self._takeover_hotkey = (takeover_hotkey or "F9").strip().upper()
+        self._takeover_key = self._parse_hotkey(self._takeover_hotkey)
         self._matchstick_hotkeys = matchstick_hotkeys
         self._cost_bar_calibration_name = cost_bar_calibration_name
         self.avatar_model_name = avatar_model_name
@@ -285,6 +289,7 @@ class ActionRecorder:
         self.loaded_script = loaded_script
         self.loaded_script_path = loaded_script_path
         self._script_timer_wrapper: Optional[_ScriptTimerWrapper] = None
+        self._loaded_script_error: Optional[str] = None
         self._executed_actions: List[OperatorAction] = []
         self._initial_deployed: Dict[Tuple[int, int], str] = {}
         self._initial_bar_state: Optional[List[Dict]] = None
@@ -382,6 +387,37 @@ class ActionRecorder:
     # ------------------------------------------------------------------
     # 公共接口
     # ------------------------------------------------------------------
+    def set_initial_operator_count(self, count: int) -> None:
+        """在录制器运行期间动态更新初始干员数量。"""
+        with self._lock:
+            self.initial_operator_count = max(0, count)
+        self._log(f"初始干员数量已更新为 {self.initial_operator_count}")
+
+    def set_initial_item_count(self, count: int) -> None:
+        """在录制器运行期间动态更新初始道具数量。"""
+        with self._lock:
+            self.initial_item_count = max(0, count)
+        self._log(f"初始道具数量已更新为 {self.initial_item_count}")
+
+    def set_support_count(self, count: int) -> None:
+        """在录制器运行期间动态更新是否借用助战干员（0 或 1）。"""
+        with self._lock:
+            self.support_count = max(0, count)
+        self._log(f"助战干员数量已更新为 {self.support_count}")
+
+    @staticmethod
+    def _parse_hotkey(key_str: str):
+        """把用户输入的快捷键字符串解析为 pynput 可比较的 Key 对象。"""
+        name = (key_str or "").strip().lower()
+        if not name:
+            return None
+        special = getattr(keyboard.Key, name, None)
+        if special is not None:
+            return special
+        if len(name) == 1:
+            return keyboard.KeyCode.from_char(name)
+        return None
+
     def start(self):
         if self._recording:
             self._log("start() 被调用但已在录制中")
@@ -402,6 +438,7 @@ class ActionRecorder:
         self._initial_deployed.clear()
         self._initial_bar_state = None
         self._takeover_requested = False
+        self._loaded_script_error = None
         self._reset_state()
 
         self._state = "WAITING_FOR_START"
@@ -409,25 +446,32 @@ class ActionRecorder:
         self._wait_thread.start()
         self._log("start() 进入 WAITING_FOR_START，等待 cost 检测...")
 
-        # 无预装载脚本时立即启动输入监听器；
-        # 有预装载脚本时，监听器在脚本执行完成/接管后由 _start_recording_listeners 启动
+        # 键盘监听器始终启动，用于响应 F10 停止及接管快捷键；
+        # 鼠标监听器在无预装载脚本时立即启动，有预装载脚本时等脚本结束/接管后再启动。
+        self._start_keyboard_listener()
         if self.loaded_script is None:
-            self._start_recording_listeners()
+            self._start_mouse_listener()
 
-    def _start_recording_listeners(self):
-        """启动鼠标/键盘监听器，开始记录用户操作。"""
-        if self._mouse_listener is not None or self._keyboard_listener is not None:
+    def _start_keyboard_listener(self):
+        """启动键盘监听器，用于快捷键（停止录制、手动接管等）。"""
+        if self._keyboard_listener is not None:
+            return
+        self._keyboard_listener = keyboard.Listener(
+            on_press=self._on_press,
+        )
+        self._keyboard_listener.start()
+        self._log("键盘监听器已启动")
+
+    def _start_mouse_listener(self):
+        """启动鼠标监听器，开始记录用户操作。"""
+        if self._mouse_listener is not None:
             return
         self._mouse_listener = mouse.Listener(
             on_click=self._on_click,
             on_move=self._on_move,
         )
-        self._keyboard_listener = keyboard.Listener(
-            on_press=self._on_press,
-        )
         self._mouse_listener.start()
-        self._keyboard_listener.start()
-        self._log("监听器已启动")
+        self._log("鼠标监听器已启动")
 
     def _stop_recording_listeners(self):
         """停止鼠标/键盘监听器。"""
@@ -625,7 +669,13 @@ class ActionRecorder:
             roi_h = int(h * rh)
             try:
                 name_img = self.capture.capture_roi(x, y, roi_w, roi_h)
-            except Exception:
+                if self.debug:
+                    self._log(
+                        f"编队槽位 {captured} name_roi capture: shape={name_img.shape}, "
+                        f"mean={name_img.mean():.1f}"
+                    )
+            except Exception as e:
+                self._log(f"编队槽位 {captured} name_roi 截图失败: {e}")
                 continue
             lines = self.ocr.recognize(name_img, min_confidence=0.5)
             best_name = None
@@ -658,7 +708,13 @@ class ActionRecorder:
             ah = int(h * ah)
             try:
                 avatar = self.capture.capture_roi(ax, ay, aw, ah)
-            except Exception:
+                if self.debug:
+                    self._log(
+                        f"编队槽位 {captured} avatar_roi capture: shape={avatar.shape}, "
+                        f"mean={avatar.mean():.1f}"
+                    )
+            except Exception as e:
+                self._log(f"编队槽位 {captured} avatar_roi 截图失败: {e}")
                 continue
             self._squad_avatars[name] = avatar
 
@@ -840,9 +896,14 @@ class ActionRecorder:
             self._log(f"聚焦游戏窗口失败: {e}")
 
     def _nearest_grid(self, win_x: int, win_y: int, side: bool = False) -> Optional[Tuple[int, int]]:
-        # side 视角下部署落点偏下一行，判定前将坐标上移固定像素（按当前分辨率缩放）
+        # side 视角下部署落点相对 tile 中心偏下一行；
+        # 判定前把测试点沿实际落点方向的反方向移回 tile 中心。
         if side:
-            win_y += int(round(self._SIDE_GRID_Y_OFFSET * self._scale_y))
+            ox, oy = self.tile_calc.get_side_deploy_offset_vector(
+                offset_px_base=self._SIDE_GRID_OFFSET_MAG_PX
+            )
+            win_x -= int(round(ox))
+            win_y -= int(round(oy))
         # side 视角下使用投影四边形命中测试，避免“落在 A 格内但离 B 格中心更近”的误判
         if side:
             hit = self.tile_calc.hit_test(win_x, win_y, side=True)
@@ -969,7 +1030,13 @@ class ActionRecorder:
         x, y, roi_w, roi_h = self._bar_capture_roi()
         try:
             img = self.capture.capture_roi(x, y, roi_w, roi_h)
-        except Exception:
+            if self.debug:
+                self._log(
+                    f"TEAM_BAR capture: roi=({x},{y},{roi_w},{roi_h}), "
+                    f"shape={img.shape}, mean={img.mean():.1f}"
+                )
+        except Exception as e:
+            self._log(f"TEAM_BAR capture_roi 失败: {e}，保存全黑占位图")
             img = np.zeros((roi_h, roi_w, 4), dtype=np.uint8)
         keyframe_id = f"team_bar_{time_ms:08d}"
         path = self._save_image(img, f"{keyframe_id}.png")
@@ -1217,14 +1284,43 @@ class ActionRecorder:
                         time.sleep(0.01)
 
                     # 预装载脚本模式下由 _execute_loaded_script 继续处理
-                    self._execute_loaded_script()
+                    try:
+                        self._execute_loaded_script()
+                    except Exception as e:
+                        error_msg = f"装载脚本执行异常: {e}"
+                        import traceback
+                        tb = traceback.format_exc()
+                        # 无论是否开启 debug 都输出到控制台，避免静默吞掉错误
+                        print(f"[录制器] {error_msg}")
+                        print(tb)
+                        self._loaded_script_error = f"{error_msg}\n{tb}"
+                        self._log(error_msg)
+                        self._log(tb)
+                        # 尽量把游戏暂停，避免用户在不知情的情况下时间继续推进
+                        try:
+                            action.press_key(self._pause_key)
+                            self.timer.pause()
+                        except Exception:
+                            pass
+                        # 恢复 RegionStateTimer 热键监听
+                        try:
+                            self.timer.reconnect_hotkey()
+                        except Exception:
+                            pass
+                        # 隐藏接管按钮
+                        if self._on_takeover_callback is not None:
+                            try:
+                                self._on_takeover_callback(False)
+                            except Exception:
+                                pass
+                        self._script_timer_wrapper = None
 
                 with self._lock:
                     self._state = "IDLE"
 
-                # 有预装载脚本且执行完成后才启动监听器
+                # 有预装载脚本且执行完成后才启动鼠标监听器（键盘监听器已在 start() 启动）
                 if self.loaded_script is not None and not self._stop_requested:
-                    self._start_recording_listeners()
+                    self._start_mouse_listener()
                 break
             time.sleep(self.timer.frame_ms / 1000.0)
 
@@ -1366,6 +1462,8 @@ class ActionRecorder:
             loop.run_until_complete(self._run_executor_with_takeover(executor))
         finally:
             loop.close()
+            # 关闭后把当前线程的事件循环置空，避免后续代码拿到已关闭的 loop
+            asyncio.set_event_loop(None)
             # 脚本结束后把底层 RegionStateTimer 对齐回包装器时间，以便继续录制
             self._log_loaded_script(
                 f"脚本执行结束/接管，wrapper elapsed={wrapper.get_elapsed_ms():.1f}"
@@ -1429,6 +1527,9 @@ class ActionRecorder:
                 if a.time_ms <= current_ms
             ]
 
+        # 脚本结束，切换回 RegionStateTimer 作为时间源
+        self._script_timer_wrapper = None
+
         # 通知 UI 恢复录制按钮
         if self._on_takeover_callback is not None:
             self._on_takeover_callback(False)
@@ -1443,7 +1544,6 @@ class ActionRecorder:
             f"预装载脚本执行结束，已执行 {len(self._executed_actions)} 个操作，"
             f"接管={self._takeover_requested}"
         )
-        self._script_timer_wrapper = None
 
     async def _run_executor_with_takeover(self, executor: ScriptExecutor):
         """在 executor 运行的同时轮询接管/停止请求。"""
@@ -1844,17 +1944,27 @@ class ActionRecorder:
     def _on_press(self, key):
         if not self._recording:
             return
+
+        with self._lock:
+            state = self._state
+
+        # 停止录制快捷键（始终响应）
         if key == keyboard.Key.f10:
             self._log("F10 停止录制")
             self._stop_requested = True
             return
-        char = getattr(key, "char", None)
-        with self._lock:
-            state = self._state
 
-        if state == "WAITING_FOR_START":
+        # 手动接管快捷键（装载脚本执行期间可用）
+        if self._takeover_key is not None and key == self._takeover_key:
+            if state == "EXECUTING_LOADED_SCRIPT":
+                self._log(f"{self._takeover_hotkey} 手动接管")
+                self.take_over()
             return
 
+        if state == "WAITING_FOR_START" or state == "EXECUTING_LOADED_SCRIPT":
+            return
+
+        char = getattr(key, "char", None)
         self._log(f"key_press char={char} key={key} state={state}")
 
         if state == "UNIT_SELECTED":

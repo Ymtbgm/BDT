@@ -195,10 +195,15 @@ class WindowCapture:
         window_title: str = "明日方舟",
         backend: str = "printwindow",
         minimum_update_interval: int = 6,
+        debug: bool = False,
     ):
         self.window_title = window_title
         self.backend = backend
-        self.sct = None
+        self.debug = debug
+        # mss 的 Windows DC 句柄存储在线程本地变量中，跨线程使用会报
+        # "'_thread._local' object has no attribute 'srcdc'"，因此每个线程
+        # 需要独立的 mss 实例。
+        self._mss_local = threading.local()
         self._wgc_backend: Optional[_WindowsCaptureBackend] = None
         self.monitor = None
         self._hwnd = None
@@ -212,8 +217,20 @@ class WindowCapture:
             )
             self.monitor = self._wgc_backend.get_monitor()
         else:
-            self.sct = mss.mss()
+            # 预热主线程的 mss 实例，同时完成窗口矩形初始化
+            _ = self._get_mss()
             self._update_window_rect()
+            if self.debug:
+                print(f"[WindowCapture] backend={backend}, monitor={self.monitor}")
+
+    def _get_mss(self):
+        """返回当前线程的 mss 实例，按需创建。"""
+        sct = getattr(self._mss_local, "sct", None)
+        if sct is None:
+            # 使用 mss.mss() 以保持最大兼容性；mss.MSS() 在部分版本/导入方式下可能不可用。
+            sct = mss.mss()
+            self._mss_local.sct = sct
+        return sct
 
     def _find_hwnd(self) -> int:
         if self._hwnd is not None and win32gui.IsWindow(self._hwnd):
@@ -238,6 +255,8 @@ class WindowCapture:
                 "width": right - left,
                 "height": bottom - top,
             }
+            if self.debug:
+                print(f"[WindowCapture] _update_window_rect: hwnd={hwnd}, monitor={self.monitor}")
         except Exception as e:
             raise RuntimeError(f"获取窗口位置失败: {e}")
 
@@ -286,9 +305,7 @@ class WindowCapture:
         """使用 mss 截取屏幕区域（前台截图）。"""
         if self.monitor is None:
             self._update_window_rect()
-        if self.sct is None:
-            self.sct = mss.mss()
-        screenshot = self.sct.grab(self.monitor)
+        screenshot = self._get_mss().grab(self.monitor)
         # 直接从 raw bytes 创建 numpy，避免 np.array(ScreenShot) 的内部打包开销
         img = np.frombuffer(screenshot.raw, dtype=np.uint8).reshape(
             (screenshot.height, screenshot.width, 4)
@@ -299,9 +316,7 @@ class WindowCapture:
         """使用 mss 截取窗口客户区（前台截图，获取当前实际显示像素）。"""
         if self.monitor is None:
             self._update_window_rect()
-        if self.sct is None:
-            self.sct = mss.mss()
-        screenshot = self.sct.grab(self.monitor)
+        screenshot = self._get_mss().grab(self.monitor)
         img = np.frombuffer(screenshot.raw, dtype=np.uint8).reshape(
             (screenshot.height, screenshot.width, 4)
         )
@@ -312,11 +327,19 @@ class WindowCapture:
             return self._wgc_backend.capture()
         if self.backend == "printwindow":
             try:
-                return self._capture_printwindow()
+                img = self._capture_printwindow()
+                if self.debug:
+                    print(f"[WindowCapture] capture(printwindow): shape={img.shape}, mean={img.mean():.1f}")
+                return img
             except Exception as e:
+                if self.debug:
+                    print(f"[WindowCapture] printwindow failed: {e}, fallback to mss")
                 # 回退到 mss
                 return self._capture_mss()
-        return self._capture_mss()
+        img = self._capture_mss()
+        if self.debug:
+            print(f"[WindowCapture] capture(mss): shape={img.shape}, mean={img.mean():.1f}")
+        return img
 
     def get_window_size(self) -> Tuple[int, int]:
         if self._wgc_backend is not None:
@@ -329,14 +352,19 @@ class WindowCapture:
         """截取屏幕指定 ROI（绝对屏幕坐标），返回 BGRA。"""
         if self._wgc_backend is not None:
             return self._wgc_backend.capture_roi(x, y, w, h)
-        if self.sct is None:
-            self.sct = mss.mss()
         monitor = {"left": x, "top": y, "width": w, "height": h}
-        screenshot = self.sct.grab(monitor)
-        img = np.frombuffer(screenshot.raw, dtype=np.uint8).reshape(
-            (screenshot.height, screenshot.width, 4)
-        )
-        return img
+        try:
+            screenshot = self._get_mss().grab(monitor)
+            img = np.frombuffer(screenshot.raw, dtype=np.uint8).reshape(
+                (screenshot.height, screenshot.width, 4)
+            )
+            if self.debug:
+                print(f"[WindowCapture] capture_roi: monitor={monitor}, shape={img.shape}, mean={img.mean():.1f}")
+            return img
+        except Exception as e:
+            if self.debug:
+                print(f"[WindowCapture] capture_roi FAILED: monitor={monitor}, error={e}")
+            raise
 
     def refresh_rect(self):
         if self._wgc_backend is not None:
@@ -349,12 +377,13 @@ class WindowCapture:
         """停止底层捕获资源（主要用于 windows-capture 后端）。"""
         if self._wgc_backend is not None:
             self._wgc_backend.stop()
-        if self.sct is not None:
+        sct = getattr(self._mss_local, "sct", None)
+        if sct is not None:
             try:
-                self.sct.close()
+                sct.close()
             except Exception:
                 pass
-            self.sct = None
+            self._mss_local.sct = None
 
     def get_frame_arrival_intervals(self) -> list:
         """返回 windows-capture 后端最近 2s 内的帧到达间隔（ms）；mss 后端返回空列表。"""
