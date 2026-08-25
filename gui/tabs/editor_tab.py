@@ -1,5 +1,5 @@
 import json
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QBrush
 
+from core.special_behaviors import get_registry, ConfigField
+from core.special_behaviors.probability_checkpoints import get_method_registry
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo, SummonInfo
 
 
@@ -19,6 +21,7 @@ class EditorTab(QWidget):
         super().__init__()
         self.main_window = main_window
         self._dirty = False
+        self._method_field_widgets: list = []
         self._build_ui()
 
     def _mark_dirty(self):
@@ -212,6 +215,27 @@ class EditorTab(QWidget):
         summon_layout.addLayout(summon_btn_layout)
         lists_panel.addWidget(summon_widget, 1, 0)
 
+        # ---- 特殊行为 ----
+        special_widget = QWidget()
+        special_layout = QVBoxLayout(special_widget)
+        special_layout.setContentsMargins(0, 0, 0, 0)
+        special_layout.setSpacing(3)
+        special_layout.addWidget(QLabel("特殊行为"))
+        self.main_window.special_behaviors_list = QListWidget()
+        self.main_window.special_behaviors_list.setMinimumHeight(60)
+        self.main_window.special_behaviors_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.main_window.special_behaviors_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        special_layout.addWidget(self.main_window.special_behaviors_list)
+        self.main_window.special_behavior_desc_label = QLabel()
+        self.main_window.special_behavior_desc_label.setWordWrap(True)
+        self.main_window.special_behavior_desc_label.setStyleSheet("color: #666;")
+        special_layout.addWidget(self.main_window.special_behavior_desc_label)
+        lists_panel.addWidget(special_widget, 1, 1)
+
         lists_panel.setColumnStretch(0, 1)
         lists_panel.setColumnStretch(1, 1)
         lists_panel.setRowStretch(0, 1)
@@ -281,6 +305,7 @@ class EditorTab(QWidget):
             ActionType.ADD_SUMMON: "部署区新增召唤物",
             ActionType.REMOVE_SUMMON: "部署区移除召唤物",
             ActionType.RESET_SUMMON: "部署区修正召唤物",
+            ActionType.SPECIAL_BEHAVIOR: "特殊行为",
         }
         self.main_window._action_labels_rev = {v: k for k, v in self.main_window._action_labels.items()}
 
@@ -338,6 +363,27 @@ class EditorTab(QWidget):
         right_panel.addWidget(QLabel("是否为场上装置"))
         self.main_window.chk_is_object = QCheckBox("is_object")
         right_panel.addWidget(self.main_window.chk_is_object)
+
+        # ---- 特殊行为配置区 ----
+        self.main_window.special_behavior_widget = QWidget()
+        special_behavior_layout = QVBoxLayout(self.main_window.special_behavior_widget)
+        special_behavior_layout.setContentsMargins(0, 0, 0, 0)
+        special_behavior_layout.setSpacing(3)
+        special_behavior_layout.addWidget(QLabel("特殊行为类型"))
+        self.main_window.combo_special_behavior = QComboBox()
+        special_behavior_layout.addWidget(self.main_window.combo_special_behavior)
+        self.main_window.special_behavior_desc = QLabel()
+        self.main_window.special_behavior_desc.setWordWrap(True)
+        self.main_window.special_behavior_desc.setStyleSheet("color: #666;")
+        special_behavior_layout.addWidget(self.main_window.special_behavior_desc)
+        special_behavior_layout.addWidget(QLabel("参数"))
+        self.main_window.special_params_panel = QWidget()
+        self.main_window.special_params_layout = QVBoxLayout(self.main_window.special_params_panel)
+        self.main_window.special_params_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_window.special_params_layout.setSpacing(3)
+        special_behavior_layout.addWidget(self.main_window.special_params_panel)
+        self.main_window.special_behavior_widget.hide()
+        right_panel.addWidget(self.main_window.special_behavior_widget)
 
         right_panel.addStretch()
 
@@ -402,7 +448,10 @@ class EditorTab(QWidget):
         self.main_window.edit_summon_charges.valueChanged.connect(self._auto_apply_edit)
         self.main_window.edit_dir.currentTextChanged.connect(self._auto_apply_edit)
         self.main_window.chk_is_object.stateChanged.connect(self._auto_apply_edit)
+        self.main_window.combo_special_behavior.currentIndexChanged.connect(self._on_special_behavior_changed)
+        self.main_window.special_behaviors_list.currentRowChanged.connect(self._on_special_behavior_list_selected)
 
+        self._refresh_special_behaviors_list()
         self._refresh_table()
 
     def _update_script_meta(self):
@@ -623,6 +672,227 @@ class EditorTab(QWidget):
             self.main_window.combo_op.setEditText(current)
         self.main_window.combo_op.blockSignals(False)
 
+    def _refresh_special_behaviors_list(self):
+        registry = get_registry()
+        behaviors = registry.list_behaviors()
+        self.main_window.special_behaviors_list.blockSignals(True)
+        self.main_window.special_behaviors_list.clear()
+        self.main_window.combo_special_behavior.blockSignals(True)
+        self.main_window.combo_special_behavior.clear()
+        for behavior in behaviors:
+            self.main_window.special_behaviors_list.addItem(behavior.behavior_id)
+            self.main_window.combo_special_behavior.addItem(behavior.behavior_id, behavior.behavior_id)
+        self.main_window.special_behaviors_list.blockSignals(False)
+        self.main_window.combo_special_behavior.blockSignals(False)
+        if behaviors:
+            self.main_window.special_behaviors_list.setCurrentRow(0)
+            self._on_special_behavior_list_selected()
+
+    def _on_special_behavior_list_selected(self):
+        row = self.main_window.special_behaviors_list.currentRow()
+        if row < 0:
+            self.main_window.special_behavior_desc_label.setText("")
+            return
+        behavior_id = self.main_window.special_behaviors_list.item(row).text()
+        registry = get_registry()
+        behavior = registry.get(behavior_id)
+        desc = behavior.description if behavior else ""
+        self.main_window.special_behavior_desc_label.setText(desc)
+
+    def _on_special_behavior_changed(self):
+        behavior_id = self.main_window.combo_special_behavior.currentData()
+        registry = get_registry()
+        behavior = registry.get(behavior_id) if behavior_id else None
+        if behavior:
+            self.main_window.special_behavior_desc.setText(behavior.description)
+        else:
+            self.main_window.special_behavior_desc.setText("")
+        self._rebuild_special_params_form(behavior)
+        self._auto_apply_edit()
+
+    def _rebuild_special_params_form(self, behavior):
+        self._method_field_widgets.clear()
+        while self.main_window.special_params_layout.count():
+            item = self.main_window.special_params_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.hide()
+                widget.deleteLater()
+        if behavior is None:
+            return
+        for field in behavior.get_config_fields():
+            self._add_config_field_widget(field, is_method_field=False)
+
+        # 概率点检查需要在选择检查方式后动态显示该方法专属参数
+        if behavior and behavior.behavior_id == "概率点检查":
+            check_method_widget = self._find_check_method_widget()
+            if check_method_widget is not None:
+                check_method_widget.currentIndexChanged.connect(
+                    self._on_probability_checkpoint_method_changed
+                )
+                self._on_probability_checkpoint_method_changed()
+
+    def _find_check_method_widget(self):
+        """在特殊行为参数表单中查找 check_method 下拉框。"""
+        for i in range(self.main_window.special_params_layout.count()):
+            item = self.main_window.special_params_layout.itemAt(i)
+            widget = item.widget()
+            if widget is None:
+                continue
+            if widget.property("sb_field_name") == "check_method":
+                return widget
+        return None
+
+    def _clear_method_specific_fields(self):
+        """移除动态添加的方法专属参数字件。"""
+        for widget in self._method_field_widgets:
+            self.main_window.special_params_layout.removeWidget(widget)
+            widget.hide()
+            widget.deleteLater()
+        self._method_field_widgets.clear()
+
+    def _on_probability_checkpoint_method_changed(self):
+        """概率点检查的 check_method 改变时，重建方法专属参数。"""
+        self._clear_method_specific_fields()
+        check_method_widget = self._find_check_method_widget()
+        if check_method_widget is None:
+            return
+        method_id = check_method_widget.currentData()
+        if method_id is None:
+            return
+        registry = get_method_registry()
+        method = registry.get(method_id)
+        if method is None:
+            return
+        for field in method.get_config_fields():
+            self._add_config_field_widget(field, is_method_field=True)
+        # 如果有已保存的参数，尝试填充方法专属字段
+        current = self._get_action_being_edited()
+        if current and current.action == ActionType.SPECIAL_BEHAVIOR:
+            self._set_special_behavior_params(current.params)
+
+    def _add_config_field_widget(self, field, is_method_field: bool = False):
+        """根据 ConfigField 创建一个表单控件并加入布局。"""
+        label = QLabel(field.label)
+        if is_method_field:
+            label.setProperty("sb_method_field", True)
+            self._method_field_widgets.append(label)
+        self.main_window.special_params_layout.addWidget(label)
+        if field.type == "choice":
+            widget = QComboBox()
+            for opt in field.options:
+                widget.addItem(opt["label"], opt["value"])
+            if field.default is not None:
+                idx = widget.findData(field.default)
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+            widget.currentIndexChanged.connect(self._auto_apply_edit)
+        elif field.type == "int":
+            widget = QSpinBox()
+            widget.setRange(-999999, 999999)
+            if field.default is not None:
+                widget.setValue(int(field.default))
+            widget.valueChanged.connect(self._auto_apply_edit)
+        elif field.type == "bool":
+            widget = QCheckBox(field.label)
+            if field.default is not None:
+                widget.setChecked(bool(field.default))
+            widget.stateChanged.connect(self._auto_apply_edit)
+        elif field.type == "unit":
+            widget = QComboBox()
+            widget.setEditable(True)
+            unit_names = []
+            for op in getattr(self.main_window.script, "operators", []):
+                if op and op not in unit_names:
+                    unit_names.append(op)
+            for it in getattr(self.main_window.script, "items", []):
+                if it.name and it.name not in unit_names:
+                    unit_names.append(it.name)
+            for sm in getattr(self.main_window.script, "summons", []):
+                if sm.name and sm.name not in unit_names:
+                    unit_names.append(sm.name)
+            for name in unit_names:
+                widget.addItem(name, name)
+            if field.default is not None:
+                idx = widget.findData(field.default)
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                else:
+                    widget.setEditText(str(field.default))
+            widget.currentIndexChanged.connect(self._auto_apply_edit)
+            widget.currentTextChanged.connect(self._auto_apply_edit)
+        else:  # str
+            widget = QLineEdit()
+            widget.setPlaceholderText(field.hint or "")
+            if field.default is not None:
+                widget.setText(str(field.default))
+            widget.textChanged.connect(self._auto_apply_edit)
+        widget.setProperty("sb_field_name", field.name)
+        if is_method_field:
+            widget.setProperty("sb_method_field", True)
+            self._method_field_widgets.append(widget)
+        widget.setToolTip(field.hint)
+        self.main_window.special_params_layout.addWidget(widget)
+
+    def _get_action_being_edited(self):
+        """获取当前右侧正在编辑的 action，没有则返回 None。"""
+        row = self.main_window.action_table.currentRow()
+        idx = self._table_row_to_action_idx(row)
+        if idx is None:
+            return None
+        script = self.main_window.script
+        if not script or idx < 0 or idx >= len(script.actions):
+            return None
+        return script.actions[idx]
+
+    def _get_special_behavior_params(self) -> Dict[str, Any]:
+        params = {}
+        for i in range(self.main_window.special_params_layout.count()):
+            item = self.main_window.special_params_layout.itemAt(i)
+            widget = item.widget()
+            if widget is None:
+                continue
+            name = widget.property("sb_field_name")
+            if not name:
+                continue
+            if isinstance(widget, QComboBox):
+                data = widget.currentData()
+                params[name] = data if data is not None else widget.currentText()
+            elif isinstance(widget, QSpinBox):
+                params[name] = widget.value()
+            elif isinstance(widget, QCheckBox):
+                params[name] = widget.isChecked()
+            elif isinstance(widget, QLineEdit):
+                params[name] = widget.text()
+        return params
+
+    def _set_special_behavior_params(self, params: Optional[Dict[str, Any]]):
+        params = params or {}
+        for i in range(self.main_window.special_params_layout.count()):
+            item = self.main_window.special_params_layout.itemAt(i)
+            widget = item.widget()
+            if widget is None:
+                continue
+            name = widget.property("sb_field_name")
+            if name not in params:
+                continue
+            val = params[name]
+            if isinstance(widget, QComboBox):
+                idx = widget.findData(val)
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                else:
+                    widget.setEditText(str(val))
+            elif isinstance(widget, QSpinBox):
+                try:
+                    widget.setValue(int(val))
+                except Exception:
+                    pass
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(bool(val))
+            elif isinstance(widget, QLineEdit):
+                widget.setText(str(val))
+
     def _refresh_table(self):
         self.main_window.action_table.blockSignals(True)
         selected_time = None
@@ -729,6 +999,15 @@ class EditorTab(QWidget):
                     self.main_window.edit_summon_charges.setValue(max(0, act.grid[0]))
                 else:
                     self.main_window.edit_summon_charges.setValue(1)
+            elif act.action == ActionType.SPECIAL_BEHAVIOR:
+                behavior_id = act.operator_name or ""
+                idx = self.main_window.combo_special_behavior.findData(behavior_id)
+                if idx >= 0:
+                    self.main_window.combo_special_behavior.setCurrentIndex(idx)
+                else:
+                    self.main_window.combo_special_behavior.setEditText(behavior_id)
+                self._on_special_behavior_changed()
+                self._set_special_behavior_params(act.params)
             else:
                 grid = act.grid
                 if (
@@ -767,7 +1046,7 @@ class EditorTab(QWidget):
         elif col == 3:
             act.operator_name = val or None
         elif col == 4:
-            if act.action in (ActionType.ADD_SUMMON, ActionType.REMOVE_SUMMON, ActionType.RESET_SUMMON):
+            if act.action in (ActionType.ADD_SUMMON, ActionType.REMOVE_SUMMON, ActionType.RESET_SUMMON, ActionType.SPECIAL_BEHAVIOR):
                 return
             val = self.main_window._normalize_grid_text(val)
             if val:
@@ -791,6 +1070,8 @@ class EditorTab(QWidget):
 
     def _on_action_type_changed(self):
         act = self.main_window.combo_action.currentData()
+        # 特殊行为面板只在选中特殊行为时显示，其余情况一律隐藏
+        self.main_window.special_behavior_widget.hide()
         if act == ActionType.DEPLOY:
             self.main_window.grid_input_widget.show()
             self.main_window.item_index_widget.hide()
@@ -835,6 +1116,16 @@ class EditorTab(QWidget):
             self.main_window.edit_dir.setEnabled(False)
             self.main_window.combo_op.setEnabled(True)
             self.main_window.chk_is_object.setEnabled(False)
+        elif act == ActionType.SPECIAL_BEHAVIOR:
+            self.main_window.grid_input_widget.hide()
+            self.main_window.item_index_widget.hide()
+            self.main_window.summon_charges_widget.hide()
+            self.main_window.edit_dir.setEnabled(False)
+            self.main_window.combo_op.setEnabled(False)
+            self.main_window.chk_is_object.setEnabled(False)
+            self.main_window.special_behavior_widget.show()
+            if not getattr(self.main_window, "_selecting", False):
+                self._on_special_behavior_changed()
         else:
             self.main_window.grid_input_widget.show()
             self.main_window.item_index_widget.hide()
@@ -894,6 +1185,12 @@ class EditorTab(QWidget):
             act.is_object = False
         elif act.action == ActionType.REMOVE_SUMMON:
             act.operator_name = self.main_window.combo_op.currentText() or None
+            act.grid = None
+            act.direction = None
+            act.is_object = False
+        elif act.action == ActionType.SPECIAL_BEHAVIOR:
+            act.operator_name = self.main_window.combo_special_behavior.currentData() or self.main_window.combo_special_behavior.currentText() or None
+            act.params = self._get_special_behavior_params() or None
             act.grid = None
             act.direction = None
             act.is_object = False

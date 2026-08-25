@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -14,6 +14,7 @@ class ActionType(str, Enum):
     ADD_SUMMON = "add_summon"  # 在部署区新增特殊召唤物（按费用插入干员区域）
     REMOVE_SUMMON = "remove_summon"  # 从部署区移除特殊召唤物（如干员撤退带走）
     RESET_SUMMON = "reset_summon"  # 强制修正部署栏中特殊召唤物数量（非用户操作，生命周期事件）
+    SPECIAL_BEHAVIOR = "special_behavior"  # 特殊行为（如概率点检查）
 
 
 class OperatorAction(BaseModel):
@@ -23,6 +24,7 @@ class OperatorAction(BaseModel):
     grid: Optional[Tuple[int, int]] = Field(None, description="目标格子 (row, col)")
     direction: Optional[str] = Field(None, description="部署方向: up/down/left/right")
     is_object: bool = Field(False, description="是否为场上道具/衍生物，True 时直接对格子操作，不走部署栏流程")
+    params: Optional[Dict[str, Any]] = Field(None, description="特殊行为等所需的额外参数")
 
 
 class SummonInfo(BaseModel):
@@ -93,3 +95,59 @@ class ScriptModel(BaseModel):
 
     def sort_actions(self):
         self.actions.sort(key=lambda a: a.time_ms)
+
+    def validate_deploy_directions(self) -> List[Tuple[int, str, str]]:
+        """检查 DEPLOY 动作是否缺少方向参数。
+
+        返回按 time_ms 排序的三元组列表：(time_ms, 类别, 名称)。
+        其中类别为 "干员"/"道具"/"召唤物"，供 UI 格式化为“秒/帧”提示。
+
+        规则：
+          1. script.operators 中的干员：所有 DEPLOY 必须有方向。
+          2. script.items / script.summons 中的同名道具/召唤物：若超过一半的
+             DEPLOY 有方向，则该名称所有 DEPLOY 都必须有方向。
+        """
+        result: List[Tuple[int, str, str]] = []
+        operator_names = set(self.operators or [])
+        item_names = {it.name for it in (self.items or [])}
+        summon_names = {s.name for s in (self.summons or [])}
+
+        def _label(name: str) -> str:
+            if name in item_names:
+                return "道具"
+            if name in summon_names:
+                return "召唤物"
+            return "干员"
+
+        # 干员：强制要求方向
+        for action in self.actions or []:
+            if action.action != ActionType.DEPLOY:
+                continue
+            name = action.operator_name
+            if not name or name not in operator_names:
+                continue
+            if not action.direction:
+                result.append((action.time_ms, "干员", name))
+
+        # 道具/召唤物：按名称统计，多数有方向则认为该名称需要方向
+        by_name: Dict[str, List[Tuple[int, OperatorAction]]] = {}
+        for action in self.actions or []:
+            if action.action != ActionType.DEPLOY:
+                continue
+            name = action.operator_name
+            if not name or name in operator_names:
+                continue
+            if name not in item_names and name not in summon_names:
+                continue
+            by_name.setdefault(name, []).append((action.time_ms, action))
+
+        for name, entries in by_name.items():
+            total = len(entries)
+            directed = sum(1 for _, act in entries if act.direction)
+            if directed > total / 2:
+                for time_ms, act in entries:
+                    if not act.direction:
+                        result.append((time_ms, _label(name), name))
+
+        result.sort(key=lambda x: x[0])
+        return result

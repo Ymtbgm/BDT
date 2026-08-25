@@ -314,6 +314,10 @@ class StageRetryHandler:
         should_stop=None,
         challenge_mode: bool = False,
         sand_table: bool = False,
+        borrow_support: bool = False,
+        support_friend_index: Optional[int] = None,
+        support_skill: int = 1,
+        support_module: int = 1,
     ) -> bool:
         """单次漏怪处理：执行重试点击并重新进入关卡。"""
         if should_stop is not None and should_stop():
@@ -328,6 +332,10 @@ class StageRetryHandler:
             should_stop=should_stop,
             challenge_mode=challenge_mode,
             sand_table=sand_table,
+            borrow_support=borrow_support,
+            support_friend_index=support_friend_index,
+            support_skill=support_skill,
+            support_module=support_module,
         )
 
     async def handle_failed_once(
@@ -336,6 +344,10 @@ class StageRetryHandler:
         should_stop=None,
         challenge_mode: bool = False,
         sand_table: bool = False,
+        borrow_support: bool = False,
+        support_friend_index: Optional[int] = None,
+        support_skill: int = 1,
+        support_module: int = 1,
     ) -> bool:
         """单次失败处理：执行失败提示后的重试点击并重新进入关卡。"""
         if should_stop is not None and should_stop():
@@ -350,4 +362,8 @@ class StageRetryHandler:
             should_stop=should_stop,
             challenge_mode=challenge_mode,
             sand_table=sand_table,
+            borrow_support=borrow_support,
+            support_friend_index=support_friend_index,
+            support_skill=support_skill,
+            support_module=support_module,
         )

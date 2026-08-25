@@ -3,7 +3,7 @@
 集中管理 ROI、阈值、键位、时间等硬编码参数，便于协作开发时统一调整。
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # ============================================================
 # 区域计时器 (RegionStateTimer)
@@ -19,6 +19,12 @@ REGION_WHITE_THRESHOLD: int = 200
 # 区域 B 白像素阈值（带迟滞）
 REGION_B_FAST_THRESHOLD: int = 1200  # > 此值视为 1.0x
 REGION_B_SLOW_THRESHOLD: int = 1000  # < 此值视为 0.2x
+
+# “费用不自然回复”模式：区域 B 1x 图标从高亮（正式开始）变为可计时的白像素阈值
+# 暗色待机时白像素约 80，高亮后约 1500；取 1000 避免中间态/过渡动画误触发。
+REGION_B_BRIGHT_THRESHOLD: int = 1000
+# “费用不自然回复”模式：检测到高亮 1x 后的启动时间补偿（ms），需实测校准
+NO_REGEN_STARTUP_OFFSET_MS: float = 0.0
 
 # 游戏内倍率
 FAST_RATE: float = 1.0
@@ -85,6 +91,7 @@ COST_BAR_TOLERANCE_RATIO: float = 0.7
 # 费用条同步修正
 COST_BAR_SYNC_INTERVAL_MS: float = 100.0
 COST_BAR_SYNC_MAX_DIFF_MS: float = 500.0
+COST_BAR_SYNC_MAX_SKIP_FRAMES: int = 4  # 费用条帧同步单次最多跳帧数
 COST_MAX_TEMPLATE_NAME: str = "cost_max.png"
 COST_MAX_MATCH_CONFIDENCE: float = 0.85
 
@@ -176,6 +183,28 @@ SQUAD_AVATAR_ROI_RATIOS: List[Tuple[float, float, float, float]] = [
 # ============================================================
 # 脚本执行 (ScriptExecutor)
 # ============================================================
+
+# 技能可点击检测最大跳帧等待次数，每次约前进 1 游戏帧
+SKILL_CLICK_MAX_ATTEMPTS: int = 5
+
+# 技能可点击检测置信度阈值
+SKILL_CLICK_CONF_THRESH: float = 0.5
+
+# 技能状态图标 ROI 中心与 view_side 的线性关系（基于 2560x1600）。
+# 公式：center = coef[0]*vx + coef[1]*vy + coef[2]*vz + coef[3]
+# view_side = (vx, vy, vz) 来自 TilePosCalculator.view_side。
+SKILL_STATUS_CENTER_COEF_X: Tuple[float, float, float, float] = (
+    -151.157764, 5.370037, -13.298396, 1495.365037
+)
+SKILL_STATUS_CENTER_COEF_Y: Tuple[float, float, float, float] = (
+    15.504996, 129.462123, -71.538437, 705.904958
+)
+
+# 高台单位技能状态图标相对地面的 Y 偏移（基于 2560x1600 的像素）
+SKILL_STATUS_HIGH_Y_OFFSET: int = -25
+
+# 技能状态图标 ROI 尺寸（基于 2560x1600 的像素 w, h）
+SKILL_STATUS_ROI_SIZE: Tuple[int, int] = (100, 100)
 
 # 最左三列（第 0-2 列）的 RETREAT/SKILL 操作提前触发时间
 LEFT_COLS_ADVANCE_MS: int = 18

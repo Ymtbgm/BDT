@@ -1,4 +1,5 @@
 import pydirectinput
+import sys
 import time
 from pynput.keyboard import Listener
 
@@ -22,6 +23,30 @@ _MATCHSTICK_ENABLED = {
     "pass_50ms": False,
 }
 _keyboard_listener = None
+
+
+def _is_game_foreground() -> bool:
+    """检查当前前台窗口标题是否包含“明日方舟”或“Arknights”。
+
+    仅在 Windows 下生效；非 Windows 平台或获取失败时默认返回 True，
+    避免影响跨平台行为。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if hwnd == 0:
+            return False
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, buf, 256)
+        title = buf.value
+        return "明日方舟" in title or "Arknights" in title
+    except Exception:
+        return True
 
 
 def configure_keys(pause: str = None, skill: str = None, retreat: str = None, speed: str = None):
@@ -192,12 +217,25 @@ def _bind_hotkeys():
             elif hasattr(key, 'name') and key.name is not None:
                 key_name = key.name.lower()
 
+            if key_name is None:
+                return
+
+            matched_action = None
             if _MATCHSTICK_ENABLED.get("pass_166ms") and key_name == _MATCHSTICK_HOTKEYS.get("pass_166ms", "").lower():
-                p_and_esc_click()
+                matched_action = p_and_esc_click
             elif _MATCHSTICK_ENABLED.get("select_operator") and key_name == _MATCHSTICK_HOTKEYS.get("select_operator", "").lower():
-                p_and_left_click()
+                matched_action = p_and_left_click
             elif _MATCHSTICK_ENABLED.get("pass_50ms") and key_name == _MATCHSTICK_HOTKEYS.get("pass_50ms", "").lower():
-                p_and_esc_click_short()
+                matched_action = p_and_esc_click_short
+
+            if matched_action is None:
+                return
+
+            # 只有前台窗口是游戏时才触发划火柴动作，避免影响聊天/社交软件
+            if not _is_game_foreground():
+                return
+
+            matched_action()
         except Exception:
             pass
 

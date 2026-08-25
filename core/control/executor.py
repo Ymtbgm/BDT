@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional, Dict, List, Tuple, Union
+from typing import Callable, Optional, Dict, List, Tuple, Union
 
 import cv2
 import numpy as np
@@ -13,9 +13,12 @@ from core.map.grid_mapper import GridMapper
 from core.game_state.timer import StageTimer
 from core.vision.ocr_engine import OCREngine
 from core.vision.digit_recognizer import DigitRecognizer
+from core.vision.skill_click_detector import SkillClickDetector
 from core.game_state.operator_pool import OperatorPool
 from core.game_state.cost_bar_sync import CostBarSync
 from core.game_state.cost_bar_sync_cc import CostBarSyncCC
+from core.special_behaviors import get_registry
+from core.base.logging_utils import log_error
 from models.script_schema import ScriptModel, ActionType, OperatorAction, SummonBinding
 
 
@@ -30,11 +33,19 @@ class ExecutorState(BaseModel):
 
 
 class ScriptExecutor:
-    def __init__(self, capture: WindowCapture, ocr: OCREngine, action_module, debug: bool = False):
+    def __init__(
+        self,
+        capture: WindowCapture,
+        ocr: OCREngine,
+        action_module,
+        debug: bool = False,
+        debug_skill_status: bool = False,
+    ):
         self.capture = capture
         self.ocr = ocr
         self.action = action_module
         self.debug = debug
+        self._debug_skill_status = debug_skill_status
         self.timer = StageTimer()
         self.script: Optional[ScriptModel] = None
         self.grid: Optional[GridMapper] = None
@@ -49,7 +60,17 @@ class ScriptExecutor:
         self._disable_resync_at_pause: bool = False
         self._summon_bindings_map: Dict[str, str] = {}
         self.digit_recognizer: Optional[DigitRecognizer] = None
+        self._skill_click_detector: Optional[SkillClickDetector] = None
         self.on_timer_adjusted: Optional[Callable[[], None]] = None
+        self.on_special_behavior_failed: Optional[Callable[[], None]] = None
+        self._special_behavior_registry = get_registry()
+        self._preselected_grid: Optional[Tuple[int, int]] = None
+        self._next_action_same_grid: bool = False
+        self._abort_no_resume: bool = False
+
+    @property
+    def _skill_status_debug(self) -> bool:
+        return self.debug or self._debug_skill_status
 
     def set_cost_sync(self, cost_sync: Optional[CostBarSyncType]):
         self.cost_sync = cost_sync
@@ -375,7 +396,7 @@ class ScriptExecutor:
         费用条 MAX 后不再提前，直接按原时间执行。
         所有提前量均按游戏时间计算，再逆映射回计时器时间。
         """
-        if action.action not in (ActionType.DEPLOY, ActionType.RETREAT, ActionType.SKILL, ActionType.ADD_SUMMON):
+        if action.action not in (ActionType.DEPLOY, ActionType.RETREAT, ActionType.SKILL, ActionType.ADD_SUMMON, ActionType.SPECIAL_BEHAVIOR):
             return action.time_ms
 
         # 检测费用条是否已满；若已满则本局后续动作不再提前/帧同步
@@ -395,11 +416,22 @@ class ScriptExecutor:
         game_time = self._game_time_ms(action.time_ms)
         advance = constants.LOADED_SCRIPT_EARLY_TRIGGER_MS  # 66ms 游戏时间
 
-        # RETREAT/SKILL 最左三列额外提前
+        # RETREAT/SKILL 最左三列额外提前；
+        # 概率点检查 若检查最左三列单位，也同步提前，
+        # 以便与同格子的 SKILL/RETREAT 落到同一 batch，复用选中状态。
         if action.action in (ActionType.RETREAT, ActionType.SKILL):
             grid = action.grid
             if not grid and action.operator_name and not action.is_object:
                 grid = self.pool.get_deployed_grid(action.operator_name)
+            if grid and grid[1] in (0, 1, 2):
+                advance += constants.LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS
+        elif action.action == ActionType.SPECIAL_BEHAVIOR and action.operator_name == "概率点检查":
+            params = action.params or {}
+            grid_str = str(params.get("grid", "")).strip()
+            try:
+                grid = tuple(map(int, grid_str.split(",")))
+            except Exception:
+                grid = None
             if grid and grid[1] in (0, 1, 2):
                 advance += constants.LOADED_SCRIPT_LEFT_COLS_ADVANCE_MS
 
@@ -409,6 +441,7 @@ class ScriptExecutor:
         if self.debug:
             print(
                 f"[动作提前] action={action.action.value} "
+                f"operator={action.operator_name} "
                 f"grid={action.grid} cost_bar_maxed={self._cost_bar_maxed} "
                 f"advance={advance}ms(游戏时间) "
                 f"original={action.time_ms}ms actual={actual}ms"
@@ -433,6 +466,118 @@ class ScriptExecutor:
         left = self.capture.monitor.get("left", 0)
         top = self.capture.monitor.get("top", 0)
         return x + left, y + top
+
+    def _get_skill_click_detector(self) -> Optional[SkillClickDetector]:
+        """懒加载技能按钮可点击检测器；加载失败时不阻断原有执行流程。"""
+        if self._skill_click_detector is not None:
+            return self._skill_click_detector
+        try:
+            self._skill_click_detector = SkillClickDetector(
+                conf_thresh=constants.SKILL_CLICK_CONF_THRESH
+            )
+        except Exception as e:
+            log_error(f"[执行器] 技能可点击检测器初始化失败，将跳过检测: {e}")
+            self._skill_click_detector = SkillClickDetector.__new__(SkillClickDetector)
+            self._skill_click_detector.available = False
+        return self._skill_click_detector
+
+    def _get_skill_click_roi(self, grid: Tuple[int, int]) -> Optional[Tuple[int, int, int, int]]:
+        """根据当前关卡的 view_side 计算技能状态图标 ROI 的绝对屏幕坐标。
+
+        使用标定好的线性系数把 view_side 映射到 2560x1600 下的中心坐标，
+        再按当前分辨率等比缩放并转换为以中心点为基准的 ROI。
+        """
+        if self.grid is None or self.grid._precise_calc is None:
+            return None
+
+        calc = self.grid._precise_calc
+        view_side = getattr(calc, "view_side", None)
+        if view_side is None or len(view_side) < 3:
+            return None
+        vx, vy, vz = view_side
+
+        cx = (
+            constants.SKILL_STATUS_CENTER_COEF_X[0] * vx
+            + constants.SKILL_STATUS_CENTER_COEF_X[1] * vy
+            + constants.SKILL_STATUS_CENTER_COEF_X[2] * vz
+            + constants.SKILL_STATUS_CENTER_COEF_X[3]
+        )
+        cy = (
+            constants.SKILL_STATUS_CENTER_COEF_Y[0] * vx
+            + constants.SKILL_STATUS_CENTER_COEF_Y[1] * vy
+            + constants.SKILL_STATUS_CENTER_COEF_Y[2] * vz
+            + constants.SKILL_STATUS_CENTER_COEF_Y[3]
+        )
+
+        # 高台单位整体向上偏移
+        height_type = calc._get_tile_height_type(grid[0], grid[1])
+        if height_type == 1:
+            cy += constants.SKILL_STATUS_HIGH_Y_OFFSET
+
+        w, h = self.capture.get_window_size()
+        scale = h / constants.BASE_HEIGHT
+        left = self.capture.monitor.get("left", 0)
+        top = self.capture.monitor.get("top", 0)
+
+        rw = int(constants.SKILL_STATUS_ROI_SIZE[0] * scale)
+        rh = int(constants.SKILL_STATUS_ROI_SIZE[1] * scale)
+        x = int(round(cx * scale)) + left - rw // 2
+        y = int(round(cy * scale)) + top - rh // 2
+        return x, y, rw, rh
+
+    async def _wait_skill_clickable(
+        self, grid: Tuple[int, int], max_attempts: int = constants.SKILL_CLICK_MAX_ATTEMPTS
+    ) -> bool:
+        """选中干员后等待技能按钮亮起。
+
+        每次检测失败则通过 p_and_esc_click 前进一帧并同步计时器，
+        直到检测到可点击状态或达到最大尝试次数。
+        模型未加载或 ROI 未配置时默认返回 True，避免阻塞执行。
+        """
+        detector = self._get_skill_click_detector()
+        if detector is None or not detector.available:
+            return True
+
+        roi = self._get_skill_click_roi(grid)
+        if roi is None:
+            if self._skill_status_debug:
+                print("[技能可点击检测] ROI 未配置，跳过检测")
+            return True
+
+        x, y, w, h = roi
+        for attempt in range(max_attempts):
+            if self._stop_event.is_set():
+                return False
+            try:
+                image = self.capture.capture_roi(x, y, w, h)
+            except Exception as e:
+                if self._skill_status_debug:
+                    print(f"[技能可点击检测] ROI 截图失败: {e}")
+                return True
+
+            clickable = detector.is_clickable(image, debug=self._skill_status_debug)
+            if self._skill_status_debug:
+                print(
+                    f"[技能可点击检测] 尝试 {attempt + 1}/{max_attempts}, "
+                    f"ROI=({x},{y},{w},{h}), clickable={clickable}"
+                )
+            if clickable:
+                return True
+
+            if attempt < max_attempts - 1:
+                # 前进一帧后继续检测
+                self.action.p_and_esc_click()
+                self._adjust_timer_by_game_delta(self._frame_duration_ms())
+                await asyncio.sleep(0.05)
+
+        error_msg = (
+            f"[技能可点击检测] 经过 {max_attempts} 次尝试仍未检测到可点击状态，"
+            f"脚本已中止并暂停游戏"
+        )
+        print(error_msg)
+        self._abort_no_resume = True
+        self._stop_event.set()
+        raise RuntimeError(error_msg)
 
     def _ensure_operator_costs(self):
         """确保已执行过一次部署栏费用识别，在首个动作暂停后调用。"""
@@ -490,7 +635,7 @@ class ScriptExecutor:
         print(f"{constants.TIMER_ADJUST_MARKER}:{timer_delta}")
 
     async def _sync_to_frame(self, time_ms: int):
-        """基于费用条白像素进行帧同步，仅当当前帧落后于目标帧（偏早）时跳帧，最多跳 3 帧。
+        """基于费用条白像素进行帧同步，仅当当前帧落后于目标帧（偏早）时跳帧，最多跳 4 帧。
 
         在子弹时间（划火柴）状态下调用 p_and_esc_click 前进一帧；差几帧调用几次。
         费用条 MAX 后帧号不再循环，同步会引入误差，直接跳过。
@@ -504,10 +649,12 @@ class ScriptExecutor:
         # DEPLOY：先选中部署栏最右侧干员进入子弹时间
         pos0 = self.pool.get_bar_index_pos(0)
         if pos0:
+            if self.debug or self.cost_sync.debug:
+                print(f"[费用条同步] 点击部署栏 0 号位进入子弹时间: pos={pos0}")
             self.action.select_at(pos0[0], pos0[1])
             await asyncio.sleep(1.0)
 
-        for attempt in range(3):
+        for attempt in range(constants.COST_BAR_SYNC_MAX_SKIP_FRAMES):
             count = self.cost_sync.white_pixel_count()
             if count is None:
                 break
@@ -530,14 +677,16 @@ class ScriptExecutor:
                         f"{self.timer.get_elapsed_ms():.1f}ms"
                     )
                 break
-            if behind <= 3:
+            if behind <= constants.COST_BAR_SYNC_MAX_SKIP_FRAMES:
                 # 划火柴内调用 p_and_esc_click，子弹时间下约前进 1 帧
+                if self.debug or self.cost_sync.debug:
+                    print(f"[费用条同步] 准备跳 1 帧: p_and_esc_click (behind={behind})")
                 self.action.p_and_esc_click()
                 self._adjust_timer_by_game_delta(self._frame_duration_ms(time_ms))
                 if self.debug or self.cost_sync.debug:
                     print("[费用条同步] p_and_esc_click 跳 1 帧")
                 continue
-            if ahead <= 3:
+            if ahead <= constants.COST_BAR_SYNC_MAX_SKIP_FRAMES:
                 self._resync_timer_to_cost_bar(time_ms)
                 if self.debug or self.cost_sync.debug:
                     print(
@@ -546,11 +695,11 @@ class ScriptExecutor:
                     )
                 break
             if self.debug or self.cost_sync.debug:
-                print("[费用条同步] 偏晚或落后超过3帧，不跳帧")
+                print(f"[费用条同步] 偏晚或落后超过{constants.COST_BAR_SYNC_MAX_SKIP_FRAMES}帧，不跳帧")
             break
 
     async def _sync_to_frame_after_select(self, time_ms: int):
-        """在已选中干员（子弹时间）后进行帧同步，仅偏早时跳帧，最多跳 3 帧。
+        """在已选中干员（子弹时间）后进行帧同步，仅偏早时跳帧，最多跳 4 帧。
 
         调用方已选中目标干员进入划火柴，这里直接在划火柴内调用 p_and_esc_click
         前进一帧；差几帧调用几次。
@@ -562,7 +711,7 @@ class ScriptExecutor:
         game_time_ms = self._game_time_ms(time_ms)
         target_frame = self.cost_sync.target_frame_index(game_time_ms)
 
-        for attempt in range(3):
+        for attempt in range(constants.COST_BAR_SYNC_MAX_SKIP_FRAMES):
             count = self.cost_sync.white_pixel_count()
             if count is None:
                 break
@@ -585,13 +734,15 @@ class ScriptExecutor:
                         f"{self.timer.get_elapsed_ms():.1f}ms"
                     )
                 break
-            if behind <= 3:
+            if behind <= constants.COST_BAR_SYNC_MAX_SKIP_FRAMES:
+                if self.debug or self.cost_sync.debug:
+                    print(f"[费用条同步-选中后] 准备跳 1 帧: p_and_esc_click (behind={behind})")
                 self.action.p_and_esc_click()
                 self._adjust_timer_by_game_delta(self._frame_duration_ms(time_ms))
                 if self.debug or self.cost_sync.debug:
                     print("[费用条同步-选中后] p_and_esc_click 跳 1 帧")
                 continue
-            if ahead <= 3:
+            if ahead <= constants.COST_BAR_SYNC_MAX_SKIP_FRAMES:
                 self._resync_timer_to_cost_bar(time_ms)
                 if self.debug or self.cost_sync.debug:
                     print(
@@ -600,7 +751,7 @@ class ScriptExecutor:
                     )
                 break
             if self.debug or self.cost_sync.debug:
-                print("[费用条同步-选中后] 偏晚或落后超过3帧，不跳帧")
+                print(f"[费用条同步-选中后] 偏晚或落后超过{constants.COST_BAR_SYNC_MAX_SKIP_FRAMES}帧，不跳帧")
             break
 
     async def _execute_action_core(self, action: OperatorAction):
@@ -656,9 +807,31 @@ class ScriptExecutor:
                 return
             x, y = self._abs_pixel(grid[0], grid[1], side=not is_left_three_cols)
 
-            if is_special:
+            # 若上一个 概率点检查 已选中同格子单位，直接复用选中状态
+            if self.debug:
+                print(
+                    f"[执行-撤退] operator={action.operator_name}, grid={grid}, "
+                    f"recorded_grid={recorded_grid}, is_special={is_special}, "
+                    f"is_object={action.is_object}, preselected_grid={self._preselected_grid}"
+                )
+            preselected = self._preselected_grid == grid
+            if preselected:
+                self._preselected_grid = None
+                if self.debug:
+                    print(f"[执行] 撤退复用预选中状态，跳过选中/子弹时间: {grid}")
+            elif is_special:
                 # 特殊单位到既定时间才出现，无法提前选中，先帧同步再选中执行
                 await self._sync_to_frame(sync_target)
+                if self._stop_event.is_set():
+                    return
+                # 左三列在 side 视角下会被 UI 遮挡，先退出 side 视角再选中
+                if is_left_three_cols:
+                    pos0 = self.pool.get_bar_index_pos(0)
+                    if pos0:
+                        if self.debug:
+                            print("[执行-撤退] 特殊单位左三列，点击部署栏 0 号位退出 side 视角")
+                        self.action.select_at(pos0[0], pos0[1])
+                        await asyncio.sleep(0.5)
                 if self._stop_event.is_set():
                     return
                 self.action.select_operator_matchstick(x, y)
@@ -680,7 +853,7 @@ class ScriptExecutor:
 
             if self._stop_event.is_set():
                 return
-            if advance:
+            if advance and not preselected:
                 self.timer.adjust(advance)
                 self._notify_timer_adjusted()
                 print(f"{constants.TIMER_ADJUST_MARKER}:{advance}")
@@ -719,9 +892,31 @@ class ScriptExecutor:
                 return
             x, y = self._abs_pixel(grid[0], grid[1], side=not is_left_three_cols)
 
-            if is_special:
+            # 若上一个 概率点检查 已选中同格子单位，直接复用选中状态
+            if self.debug:
+                print(
+                    f"[执行-技能] operator={action.operator_name}, grid={grid}, "
+                    f"recorded_grid={recorded_grid}, is_special={is_special}, "
+                    f"is_object={action.is_object}, preselected_grid={self._preselected_grid}"
+                )
+            preselected = self._preselected_grid == grid
+            if preselected:
+                self._preselected_grid = None
+                if self.debug:
+                    print(f"[执行] 技能复用预选中状态，跳过选中/子弹时间: {grid}")
+            elif is_special:
                 # 特殊单位到既定时间才出现，无法提前选中，先帧同步再选中执行
                 await self._sync_to_frame(sync_target)
+                if self._stop_event.is_set():
+                    return
+                # 左三列在 side 视角下会被 UI 遮挡，先退出 side 视角再选中
+                if is_left_three_cols:
+                    pos0 = self.pool.get_bar_index_pos(0)
+                    if pos0:
+                        if self.debug:
+                            print("[执行-技能] 特殊单位左三列，点击部署栏 0 号位退出 side 视角")
+                        self.action.select_at(pos0[0], pos0[1])
+                        await asyncio.sleep(0.5)
                 if self._stop_event.is_set():
                     return
                 self.action.select_operator_matchstick(x, y)
@@ -743,7 +938,13 @@ class ScriptExecutor:
 
             if self._stop_event.is_set():
                 return
-            if advance:
+
+            # 技能可点击状态校验：若技能尚未转好，则逐帧等待，避免过早按键导致开不出技能
+            await self._wait_skill_clickable(grid)
+
+            if self._stop_event.is_set():
+                return
+            if advance and not preselected:
                 self.timer.adjust(advance)
                 self._notify_timer_adjusted()
                 print(f"{constants.TIMER_ADJUST_MARKER}:{advance}")
@@ -802,6 +1003,54 @@ class ScriptExecutor:
             self.pool.set_summon_charges(action.operator_name, target_count)
             if self.debug:
                 print(f"[执行] 召唤物 {action.operator_name} 强制修正数量为 {target_count}")
+
+        elif action.action == ActionType.SPECIAL_BEHAVIOR:
+            await self._sync_to_frame(action.time_ms)
+            if self._stop_event.is_set():
+                return
+            # 若目标是左三列，_sync_to_frame 进入的 side 视角会遮挡目标，
+            # 先点部署栏 0 号位退出 side 视角，再执行后续选中。
+            if action.operator_name == "概率点检查" and action.params:
+                grid_str = str(action.params.get("grid", "")).strip()
+                try:
+                    _, col = map(int, grid_str.split(","))
+                    if col in (0, 1, 2):
+                        pos0 = self.pool.get_bar_index_pos(0)
+                        if pos0:
+                            if self.debug:
+                                print("[SPECIAL_BEHAVIOR] 目标为左三列，点击部署栏 0 号位退出 side 视角")
+                            self.action.select_at(pos0[0], pos0[1])
+                            await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+            behavior_id = action.operator_name
+            if not behavior_id:
+                raise RuntimeError("特殊行为缺少 behavior_id")
+            behavior = self._special_behavior_registry.get(behavior_id)
+            if behavior is None:
+                raise RuntimeError(f"未注册的特殊行为: {behavior_id}")
+            context = {
+                "executor": self,
+                "pool": self.pool,
+                "timer": self.timer,
+                "ocr": self.ocr,
+                "action": self.action,
+                "no_cleanup": self._next_action_same_grid,
+            }
+            passed = behavior.execute(self.capture, self.grid, action.params, context)
+            if self.debug:
+                print(f"[特殊行为] {behavior_id} 检查结果: {passed}")
+            if not passed:
+                print(f"[概率点检查] 条件不满足，触发重试")
+                if self.on_special_behavior_failed is not None:
+                    try:
+                        self.on_special_behavior_failed()
+                    except Exception:
+                        pass
+            # 概率点检查 在 no_cleanup 模式下会把选中格子写回 context
+            preselected = context.get("preselected_grid")
+            if preselected is not None:
+                self._preselected_grid = preselected
 
         elif action.action == ActionType.SPEED_UP:
             self.action.press_key(self.action.speed_key())
@@ -895,7 +1144,7 @@ class ScriptExecutor:
                 # PAUSE 把游戏从暂停切回运行，计时器同步恢复
                 self.timer.resume()
         finally:
-            if action.action != ActionType.PAUSE:
+            if action.action != ActionType.PAUSE and not self._abort_no_resume:
                 await asyncio.sleep(1.0)
                 pydirectinput.keyDown(pause_key)
                 self.timer.resume()
@@ -941,20 +1190,33 @@ class ScriptExecutor:
 
         await asyncio.sleep(1.0)
 
+        # 批量执行开始时清除上一次的预选中状态
+        self._preselected_grid = None
+
         try:
             if self.debug:
                 print(f"[动作计时-批量] 执行核心前: 目标={batch[0].time_ms}ms, {self._fmt_time()}")
-                action = batch[0]
-                count = self.cost_sync.white_pixel_count()
-                game_time_ms = self._game_time_ms(action.time_ms)
-                target_frame = self.cost_sync.target_frame_index(game_time_ms)
-                current_frame = self.cost_sync.current_frame(count, game_time_ms)
-                print(f"[批量执行帧校验] 目标帧={target_frame}, 当前帧={current_frame}, 白像素={count}")
+                if self.cost_sync is not None:
+                    action = batch[0]
+                    count = self.cost_sync.white_pixel_count()
+                    game_time_ms = self._game_time_ms(action.time_ms)
+                    target_frame = self.cost_sync.target_frame_index(game_time_ms)
+                    current_frame = self.cost_sync.current_frame(count, game_time_ms)
+                    print(f"[批量执行帧校验] 目标帧={target_frame}, 当前帧={current_frame}, 白像素={count}")
+                else:
+                    print("[批量执行帧校验] 费用条同步已禁用，跳过帧校验")
             for idx, action in enumerate(batch):
                 if self._stop_event.is_set():
                     break
+                self._next_action_same_grid = self._is_next_action_same_grid_skill_or_retreat(
+                    action, batch, idx
+                )
                 print(f"[批量执行] 第 {idx+1}/{len(batch)} 个: {action.action} {action.operator_name}")
                 await self._execute_action_core(action)
+                self._next_action_same_grid = False
+                # 只有 概率点检查 会设置预选中状态；执行后若不是它，则清除
+                if action.action != ActionType.SPECIAL_BEHAVIOR or action.operator_name != "概率点检查":
+                    self._preselected_grid = None
                 print(f"[批量执行] 第 {idx+1}/{len(batch)} 个完成")
                 # 同 batch 内操作之间留 1.0s 让游戏 UI 稳定，避免连续拖拽冲突
                 if idx < len(batch) - 1:
@@ -962,12 +1224,13 @@ class ScriptExecutor:
             if self.debug:
                 print(f"[动作计时-批量] 执行核心后: 目标={batch[0].time_ms}ms, {self._fmt_time()}")
         finally:
-            await asyncio.sleep(1.0)
-            pydirectinput.keyDown(pause_key)
-            self.timer.resume()
-            await asyncio.sleep(0.05)
-            pydirectinput.keyUp(pause_key)
-            await asyncio.sleep(0.05)
+            if not self._abort_no_resume:
+                await asyncio.sleep(1.0)
+                pydirectinput.keyDown(pause_key)
+                self.timer.resume()
+                await asyncio.sleep(0.05)
+                pydirectinput.keyUp(pause_key)
+                await asyncio.sleep(0.05)
 
     def _build_execution_units(self) -> List:
         """把脚本按时间聚类：同 time_ms 的操作合成 batch，差距 <40ms 的 batch 合成 cluster。"""
@@ -1020,6 +1283,36 @@ class ScriptExecutor:
                 units.append(("cluster", cluster))
         return units
 
+    def _is_next_action_same_grid_skill_or_retreat(
+        self, action: OperatorAction, group: List[OperatorAction], idx: int
+    ) -> bool:
+        """判断当前动作是否可被下一个同格子 SKILL/RETREAT 复用选中状态。
+
+        目前仅对 概率点检查 特殊行为开启：它会在目标格子选中单位，
+        若下一个动作是同格子的 SKILL/RETREAT，则不必退出子弹时间再重新进入。
+        """
+        if action.action != ActionType.SPECIAL_BEHAVIOR:
+            return False
+        if action.operator_name != "概率点检查":
+            return False
+        params = action.params or {}
+        grid_str = str(params.get("grid", "")).strip()
+        try:
+            row, col = map(int, grid_str.split(","))
+        except Exception:
+            return False
+
+        next_idx = idx + 1
+        if next_idx >= len(group):
+            return False
+        next_action = group[next_idx]
+        if next_action.action not in (ActionType.SKILL, ActionType.RETREAT):
+            return False
+        next_grid = next_action.grid
+        if not next_grid and next_action.operator_name and not next_action.is_object:
+            next_grid = self.pool.get_deployed_grid(next_action.operator_name) if self.pool else None
+        return next_grid == (row, col)
+
     async def _execute_cluster(self, groups: List[List[OperatorAction]]):
         """在单个暂停外壳中依次执行多组时间紧贴的操作，组间用 p_and_esc_click 推进一帧。"""
         import pydirectinput
@@ -1038,21 +1331,34 @@ class ScriptExecutor:
 
         await asyncio.sleep(1.0)
 
+        # 聚类开始时清除上一次的预选中状态
+        self._preselected_grid = None
+
         try:
             if self.debug:
                 print(f"[动作计时-聚类] 执行核心前: 目标={groups[0][0].time_ms}ms, {self._fmt_time()}")
-                action = groups[0][0]
-                count = self.cost_sync.white_pixel_count()
-                game_time_ms = self._game_time_ms(action.time_ms)
-                target_frame = self.cost_sync.target_frame_index(game_time_ms)
-                current_frame = self.cost_sync.current_frame(count, game_time_ms)
-                print(f"[聚类执行帧校验] 目标帧={target_frame}, 当前帧={current_frame}, 白像素={count}")
+                if self.cost_sync is not None:
+                    action = groups[0][0]
+                    count = self.cost_sync.white_pixel_count()
+                    game_time_ms = self._game_time_ms(action.time_ms)
+                    target_frame = self.cost_sync.target_frame_index(game_time_ms)
+                    current_frame = self.cost_sync.current_frame(count, game_time_ms)
+                    print(f"[聚类执行帧校验] 目标帧={target_frame}, 当前帧={current_frame}, 白像素={count}")
+                else:
+                    print("[聚类执行帧校验] 费用条同步已禁用，跳过帧校验")
             for gi, group in enumerate(groups):
                 if self._stop_event.is_set():
                     break
                 print(f"[聚类执行] 第 {gi + 1}/{len(groups)} 组, 共 {len(group)} 个操作")
                 for idx, action in enumerate(group):
+                    self._next_action_same_grid = self._is_next_action_same_grid_skill_or_retreat(
+                        action, group, idx
+                    )
                     await self._execute_action_core(action)
+                    self._next_action_same_grid = False
+                    # 只有 概率点检查 会设置预选中状态；执行后若不是它，则清除
+                    if action.action != ActionType.SPECIAL_BEHAVIOR or action.operator_name != "概率点检查":
+                        self._preselected_grid = None
                     if idx < len(group) - 1:
                         await asyncio.sleep(1.0)
                 # 不是最后一组时，根据两组目标时间差决定是否推进以及推进多少帧
@@ -1075,17 +1381,19 @@ class ScriptExecutor:
             if self.debug:
                 print(f"[动作计时-聚类] 执行核心后: 目标={groups[0][0].time_ms}ms, {self._fmt_time()}")
         finally:
-            await asyncio.sleep(1.0)
-            pydirectinput.keyDown(pause_key)
-            self.timer.resume()
-            await asyncio.sleep(0.05)
-            pydirectinput.keyUp(pause_key)
-            await asyncio.sleep(0.05)
+            if not self._abort_no_resume:
+                await asyncio.sleep(1.0)
+                pydirectinput.keyDown(pause_key)
+                self.timer.resume()
+                await asyncio.sleep(0.05)
+                pydirectinput.keyUp(pause_key)
+                await asyncio.sleep(0.05)
 
     async def run(self):
         if self.script is None:
             raise RuntimeError("未加载脚本")
         self._stop_event.clear()
+        self._abort_no_resume = False
 
         units = self._build_execution_units()
         try:

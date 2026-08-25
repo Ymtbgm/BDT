@@ -23,12 +23,16 @@ class InfoCollectionOverlay(QWidget):
 
         # 置顶通过 Windows SetWindowPos(HWND_TOPMOST) 实现，避免与
         # WA_TranslucentBackground + FramelessWindowHint 组合导致的不透明问题
+        # WindowDoesNotAcceptFocus 避免悬浮窗抢夺主窗口/其他输入框焦点
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Window
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        # 关闭后立即销毁，避免残留窗口句柄继续拦截鼠标事件
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 3)
@@ -288,6 +292,13 @@ class InfoCollectionOverlay(QWidget):
     def close_overlay(self):
         """关闭浮窗。"""
         self.close()
+
+    def closeEvent(self, event):
+        # 停止置顶定时器，防止窗口关闭后仍被强行拉回前台或拦截输入
+        if self._topmost_timer is not None:
+            self._topmost_timer.stop()
+            self._topmost_timer = None
+        super().closeEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

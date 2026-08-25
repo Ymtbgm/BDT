@@ -92,7 +92,11 @@ class Runner:
                 print(f"[DEBUG] OCREngine 初始化总耗时: {(t1 - t0) * 1000:.1f}ms")
 
             self.executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug)
-            if cost_tag:
+            self.executor.on_special_behavior_failed = lambda: self._on_leak(reason="probability_checkpoint")
+            if cost_tag == "no_regen":
+                print("[费用条同步] 费用不自然回复模式：禁用费用条同步，执行器纯按计时器驱动")
+                self.cost_sync = None
+            elif cost_tag:
                 print(f"[费用条同步] 使用危机合约校准模式: {cost_tag}")
                 self.cost_sync = CostBarSyncCC(self.capture, calibration_name=cost_tag, debug=self.debug)
             else:
@@ -503,10 +507,27 @@ class Runner:
             if not self._running:
                 break
 
-            # 如果检测到漏怪或失败，执行对应重试流程
+            # 如果检测到漏怪、失败或概率点检查失败，执行对应重试流程
             if self._leak_detected:
                 is_failed = self._leak_reason == "failed"
-                reason_text = "失败" if is_failed else "漏怪"
+                is_probability = self._leak_reason == "probability_checkpoint"
+                reason_text = "失败" if is_failed else ("概率点检查" if is_probability else "漏怪")
+
+                # 概率点检查失败：总是无限重试，直到条件满足
+                if is_probability:
+                    print("[概率点检查] 条件不满足，重新开始关卡...")
+                    ok = await self.retry_handler.handle_leak_once(
+                        script.stage_code,
+                        should_stop=lambda: self._stopping,
+                        challenge_mode=challenge_mode,
+                        sand_table=sand_table,
+                    )
+                    if not ok:
+                        print("[概率点检查] 重试进入关卡失败，停止运行")
+                        break
+                    print("[概率点检查] 重试成功，重新开始执行...")
+                    continue
+
                 # 非无限凸图模式下只补打一次，再次触发则停止
                 if not loop_mode and self._leak_retried:
                     print(f"[{reason_text}检测] 补打后再次{reason_text}，停止运行")
@@ -640,8 +661,8 @@ async def main():
 
     cost_tag = _arg_str("--cost-tag", None)
 
-    if cost_tag and cost_tag not in list_calibrations():
-        print(f"错误：--cost-tag 必须是 {list_calibrations()} 之一")
+    if cost_tag and cost_tag not in list_calibrations() and cost_tag != "no_regen":
+        print(f"错误：--cost-tag 必须是 {list_calibrations()} 之一，或 no_regen")
         sys.exit(1)
 
     ocr_engine_choice = _arg_str("--ocr-engine", "auto")

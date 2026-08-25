@@ -67,6 +67,7 @@ class TimerTab(QWidget):
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低25%", "cc_25")
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低50%", "cc_50")
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低75%", "cc_75")
+        self.main_window.combo_timer_cost_tag.addItem("费用不自然回复", "no_regen")
         self.main_window.combo_timer_cost_tag.setMaximumWidth(200)
         self.main_window.combo_timer_cost_tag.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
@@ -217,6 +218,9 @@ class TimerTab(QWidget):
         self.main_window.timer_status.setText("状态: 已停止")
         if self.main_window.isMinimized():
             self.main_window.showNormal()
+        # 关闭悬浮窗后强制主窗口回到前台并激活焦点，避免输入框无法点击
+        self.main_window.raise_()
+        self.main_window.activateWindow()
 
     def _reset_region_timer(self):
         if self.main_window._region_timer is None:

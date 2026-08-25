@@ -273,13 +273,17 @@ class RegionStateTimer:
             if self.debug:
                 print(f"[区域计时] 模板匹配可用: {self._rate_matcher.available}")
 
-        # 费用条同步修正（支持普通 / 危机合约 tag）
+        # 费用条同步修正（支持普通 / 危机合约 tag / 费用不自然回复）
         self._cost_bar_sync: Optional[CostBarSyncType] = None
         self._cost_bar_maxed = False
         self._cost_bar_last_sync_time: Optional[float] = None
         self._cost_bar_sync_warmed_up = False
         self._cost_bar_sync_corrected_while_paused = False
-        if cost_bar_calibration_name:
+        self._no_cost_bar_sync = cost_bar_calibration_name == "no_regen"
+        if self._no_cost_bar_sync:
+            if self.debug:
+                print("[区域计时] 费用不自然回复模式：禁用费用条同步，依赖高亮 1x 启动")
+        elif cost_bar_calibration_name:
             self._cost_bar_sync = CostBarSyncCC(
                 self.capture,
                 calibration_name=cost_bar_calibration_name,
@@ -832,6 +836,33 @@ class RegionStateTimer:
                     return rate
             return self._rate
 
+    def _is_bright_rate_one(self, count_b: Optional[int], state: Optional[str]) -> bool:
+        """“费用不自然回复”模式：判断区域 B 是否为高亮 1x（正式开始）。
+
+        仅当模板匹配判定为 1x 且白像素超过亮度阈值时才视为启动。
+        """
+        if state != _RateTemplateMatcher.STATE_FAST:
+            return False
+        if count_b is None:
+            return False
+        return count_b > constants.REGION_B_BRIGHT_THRESHOLD
+
+    def _save_no_regen_debug_screenshot(self, count_b: int, state: str):
+        """保存一张区域 B 调试用截图，用于校准高亮 1x 阈值。"""
+        try:
+            from core.base.paths import get_project_root
+            img = self.capture.capture_roi(*self.roi_b)
+            debug_dir = Path(get_project_root()) / "debug" / "no_regen_start"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            ts = int(time.perf_counter() * 1000)
+            path = debug_dir / f"no_regen_start_{ts}_count{count_b}_state{state}.png"
+            cv2.imwrite(str(path), img)
+            if self.debug:
+                print(f"[费用不自然回复] 调试图已保存: {path}")
+        except Exception as e:
+            if self.debug:
+                print(f"[费用不自然回复] 保存调试图失败: {e}")
+
     def _match_cost_max(self, roi_gray: np.ndarray) -> float:
         """检测费用条 ROI 是否出现 MAX 字样。"""
         tmpl = self._cost_max_template
@@ -1059,8 +1090,9 @@ class RegionStateTimer:
         self._cost_bar_sync_warmed_up = False
         self._cost_bar_sync_corrected_while_paused = False
         self._cost_bar_last_sync_time = None
+        # 费用不自然回复模式下强制禁用费用条启动检测
         self._use_cost_detection = (
-            use_cost_detection and self._cost_template is not None
+            use_cost_detection and self._cost_template is not None and not self._no_cost_bar_sync
         )
         self._cost_detector = None
         # 高精度模式：请求 1ms 系统定时器分辨率
@@ -1079,6 +1111,8 @@ class RegionStateTimer:
             )
             if self.debug:
                 print("[区域计时] 启用费用条启动检测")
+        elif self._no_cost_bar_sync and self.debug:
+            print("[区域计时] 费用不自然回复模式：使用高亮 1x 启动检测")
         elif use_cost_detection and self._cost_template is None and self.debug:
             print("[区域计时] COST 模板未加载，回退到区域B启动检测")
 
@@ -1215,6 +1249,27 @@ class RegionStateTimer:
                 count_b, rate, state = self._get_latest_sample()
                 info["count_b"] = count_b
                 info["state"] = state
+
+                # “费用不自然回复”模式：需要高亮 1x 才视为正式开始
+                if self._no_cost_bar_sync:
+                    if self.debug:
+                        print(
+                            f"[费用不自然回复] 等待高亮 1x: "
+                            f"B={count_b} state={state} bright_threshold={constants.REGION_B_BRIGHT_THRESHOLD}"
+                        )
+                    if not self._paused and self._is_bright_rate_one(count_b, state):
+                        self._started = True
+                        self._prev_paused = self._paused
+                        self._last_tick_time = time.perf_counter()
+                        self._scaled_elapsed_ms = constants.NO_REGEN_STARTUP_OFFSET_MS
+                        self._save_no_regen_debug_screenshot(count_b or 0, state or "none")
+                        print(
+                            f"[区域计时] 费用不自然回复模式启动计时 "
+                            f"B={count_b} state={state} offset={constants.NO_REGEN_STARTUP_OFFSET_MS:.1f}ms"
+                        )
+                    info["elapsed_ms"] = self._scaled_elapsed_ms
+                    return info
+
                 if (
                     rate is not None
                     and rate >= 1.0

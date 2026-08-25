@@ -155,6 +155,8 @@ class MainWindow(QMainWindow):
     btn_rec_clear_script: QPushButton
     rec_chk_support_op: QCheckBox
     rec_takeover_hotkey: QLineEdit
+    rec_chk_probability_retry: QCheckBox
+    btn_rec_probability_config: QPushButton
     combo_rec_debug: CheckedComboBox
     rec_initial_operator_count: QSpinBox
     rec_initial_item_count: QSpinBox
@@ -217,9 +219,17 @@ class MainWindow(QMainWindow):
         self._apply_matchstick_config()
 
     def closeEvent(self, event):
-        """退出时停止划火柴全局热键监听和区域计时器。"""
+        """退出时停止划火柴全局热键监听、区域计时器，并关闭所有悬浮窗。"""
         action.stop_matchstick_listener()
         self._stop_region_timer()
+        # 关闭录制器悬浮窗，避免主程序退出后残留独立窗口
+        recorder_overlay = getattr(self, "_recorder_overlay", None)
+        if recorder_overlay is not None:
+            try:
+                recorder_overlay.close()
+            except Exception:
+                pass
+            self._recorder_overlay = None
         event.accept()
 
     def _project_root(self) -> str:
@@ -278,6 +288,7 @@ class MainWindow(QMainWindow):
                         cycle_length = cal.cycle_length
                 except Exception:
                     pass
+            # 费用不自然回复模式下费用条同步被禁用，使用默认 30fps
 
         s = int(ms) // 1000
         # 加极小 epsilon，避免费用条帧边界处的浮点误差把 frame 29 显示成 28
@@ -315,6 +326,18 @@ class MainWindow(QMainWindow):
             "rec_debug_keys": self.combo_rec_debug.checked_data(),
             "rec_support_op": self.rec_chk_support_op.isChecked(),
             "rec_takeover_hotkey": self.rec_takeover_hotkey.text().strip().upper() or "F9",
+            "rec_probability_retry_enabled": self.rec_chk_probability_retry.isChecked(),
+            "rec_probability_retry_config": getattr(
+                self.recorder_tab, "_probability_retry_config",
+                {
+                    "challenge_mode": False,
+                    "sand_table": False,
+                    "borrow_support": False,
+                    "support_friend_index": 0,
+                    "support_skill": 1,
+                    "support_module": 1,
+                }
+            ),
             "rec_stage_code": self.rec_stage_code.text(),
             "rec_loaded_script_path": self.rec_loaded_script_path.text(),
             "rec_cost_tag": self.rec_cost_tag.currentData() or "",
@@ -405,6 +428,10 @@ class MainWindow(QMainWindow):
             self.combo_rec_debug.set_checked_data(legacy_keys)
         self.rec_chk_support_op.setChecked(config.get("rec_support_op", False))
         self.rec_takeover_hotkey.setText(config.get("rec_takeover_hotkey", "F9"))
+        self.rec_chk_probability_retry.setChecked(config.get("rec_probability_retry_enabled", False))
+        retry_cfg = config.get("rec_probability_retry_config", {})
+        if isinstance(retry_cfg, dict):
+            self.recorder_tab._probability_retry_config = retry_cfg
         self.rec_stage_code.setText(config.get("rec_stage_code", ""))
         self.rec_loaded_script_path.setText(config.get("rec_loaded_script_path", ""))
         rec_cost_tag = config.get("rec_cost_tag", "")

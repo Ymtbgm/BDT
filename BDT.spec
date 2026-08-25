@@ -3,10 +3,21 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metada
 
 import os
 import shutil
+import site
 import tempfile
 
 # 项目根目录固定为 spec 文件所在目录，避免因为执行目录不同导致资源路径错误。
 _project_root = os.path.abspath(SPECPATH)
+
+# 获取当前 Python 环境的 site-packages 路径（兼容 conda/venv），避免写死 .venv。
+_site_packages = None
+for _sp in site.getsitepackages():
+    if _sp.endswith('site-packages'):
+        _site_packages = _sp
+        break
+if _site_packages is None:
+    _site_packages = os.path.join(os.path.dirname(site.getusersitepackages()), 'site-packages')
+
 
 # PyInstaller 在 Windows 上处理含中文路径的图标文件时容易报 FileNotFoundError，
 # 先把图标复制到临时 ASCII 路径再使用。
@@ -38,11 +49,14 @@ hiddenimports = ['paddleocr', 'paddlex', 'paddle', 'cv2', 'numpy', 'pydantic', '
 hiddenimports += [
     'gui', 'gui.app', 'gui.main_window', 'gui.widgets', 'gui.widgets.toast', 'gui.workers', 'gui.workers.levels_update_worker',
     'core', 'core.capture.capture', 'core.vision.ocr_engine', 'core.control.executor', 'core.map.grid_mapper',
+    'core.special_behaviors', 'core.special_behaviors.base', 'core.special_behaviors.config_field',
+    'core.special_behaviors.registry', 'core.special_behaviors.probability_checkpoint',
     'core.game_state.timer', 'core.game_state.operator_pool', 'core.game_state.ui_scale_check', 'core.vision.leak_detector', 'core.control.stage_selector',
     'core.control.retry_handler', 'core.game_state.cost_bar_calibration', 'core.game_state.cost_bar_start',
     'core.game_state.cost_bar_sync', 'core.game_state.cost_bar_sync_cc', 'core.game_state.region_state_timer',
     'core.game_state.summon_registry', 'core.vision.avatar_matcher', 'core.map.tile_pos',
     'core.vision.cost_recognition', 'core.recording.resolver', 'core.vision.digit_recognizer',
+    'core.vision.skill_click_detector',
     'core.base.onnx_utils', 'core.base.logging_utils', 'core.vision.yolo_detector', 'core.base.paths',
     'core.update', 'core.update.levels_updater',
     'models', 'models.script_schema', 'models.raw_recording',
@@ -60,7 +74,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('PyQt6.QtWidgets')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # PyQt6 平台插件有时无法被自动收集，手动补齐
-_pyqt6_plugins = os.path.join(_project_root, '.venv', 'Lib', 'site-packages', 'PyQt6', 'Qt6', 'plugins', 'platforms')
+_pyqt6_plugins = os.path.join(_site_packages, 'PyQt6', 'Qt6', 'plugins', 'platforms')
 if os.path.exists(_pyqt6_plugins):
     datas += [(os.path.join(_pyqt6_plugins, 'qwindows.dll'), 'PyQt6/Qt6/plugins/platforms')]
 tmp_ret = collect_all('cv2')
@@ -105,11 +119,11 @@ for _pp_model in [
 # paddle 的 C++ 扩展与 DLL 在 PyInstaller 静态分析中极易被遗漏，
 # 导致 paddle 后端初始化报缺少 libpaddle.pyd 或 paddle/libs 下 DLL。
 binaries += collect_dynamic_libs('paddle')
-_paddle_base = os.path.join(_project_root, '.venv', 'Lib', 'site-packages', 'paddle', 'base')
+_paddle_base = os.path.join(_site_packages, 'paddle', 'base')
 if os.path.exists(os.path.join(_paddle_base, 'libpaddle.pyd')):
     binaries += [(os.path.join(_paddle_base, 'libpaddle.pyd'), 'paddle/base')]
 # libpaddle.pyd 额外依赖 common.dll 和 mkldnn.dll，PyInstaller 有时解析不到，手动补齐
-_paddle_libs = os.path.join(_project_root, '.venv', 'Lib', 'site-packages', 'paddle', 'libs')
+_paddle_libs = os.path.join(_site_packages, 'paddle', 'libs')
 for _dll_name in ('common.dll', 'mkldnn.dll'):
     _dll_path = os.path.join(_paddle_libs, _dll_name)
     if os.path.exists(_dll_path):

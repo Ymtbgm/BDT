@@ -12,7 +12,9 @@ import action
 import core.base.constants as constants
 from core.vision.avatar_matcher import AvatarMatcherBase, create_avatar_matcher
 from core.capture.capture import WindowCapture
+from core.base.paths import game_template
 from core.control.executor import ScriptExecutor
+from core.control.retry_handler import StageRetryHandler
 from core.control.stage_selector import StageSelector
 from core.game_state.cost_bar_sync_cc import CostBarSyncCC
 from core.game_state.cost_bar_calibration import list_calibrations
@@ -253,6 +255,7 @@ class ActionRecorder:
         debug_resolver: bool = False,
         debug_screenshot: bool = False,
         debug_loaded_script: bool = False,
+        debug_skill_status: bool = False,
         initial_operator_count: int = 0,
         initial_item_count: int = 0,
         support_count: int = 0,
@@ -265,6 +268,12 @@ class ActionRecorder:
         resolver_log_callback: Optional[Callable[[str], None]] = None,
         loaded_script: Optional[ScriptModel] = None,
         loaded_script_path: Optional[str] = None,
+        probability_retry_enabled: bool = False,
+        challenge_mode: bool = False,
+        sand_table: bool = False,
+        support_friend_index: Optional[int] = None,
+        support_skill: int = 1,
+        support_module: int = 1,
     ):
         self.capture = capture
         self.timer = timer
@@ -273,11 +282,13 @@ class ActionRecorder:
         # debug_resolver: OfflineResolver 离线识别日志
         # debug_screenshot: DEPLOY/RETREAT/SKILL 调试截图
         # debug_loaded_script: 装载脚本执行日志
+        # debug_skill_status: 技能可点击状态 YOLO 检测日志
         self.debug = debug
         self.debug_cost_bar = debug_cost_bar
         self.debug_resolver = debug_resolver
         self.debug_screenshot = debug_screenshot
         self.debug_loaded_script = debug_loaded_script or debug
+        self.debug_skill_status = debug_skill_status
         self._pause_key = pause_key
         self._takeover_hotkey = (takeover_hotkey or "F9").strip().upper()
         self._takeover_key = self._parse_hotkey(self._takeover_hotkey)
@@ -288,6 +299,15 @@ class ActionRecorder:
 
         self.loaded_script = loaded_script
         self.loaded_script_path = loaded_script_path
+        self.probability_retry_enabled = probability_retry_enabled
+        self.challenge_mode = challenge_mode
+        self.sand_table = sand_table
+        self.support_friend_index = support_friend_index
+        self.support_skill = support_skill
+        self.support_module = support_module
+        self._probability_retry_triggered = False
+        self._retry_handler: Optional[StageRetryHandler] = None
+        self._stage_selector: Optional[StageSelector] = None
         self._script_timer_wrapper: Optional[_ScriptTimerWrapper] = None
         self._loaded_script_error: Optional[str] = None
         self._executed_actions: List[OperatorAction] = []
@@ -384,6 +404,11 @@ class ActionRecorder:
             self._own_timer = False
         self._get_time_ms = self.timer.get_elapsed_ms
 
+        # 概率点自动凸图所需的选关/重试处理器
+        if self.loaded_script is not None and self.probability_retry_enabled:
+            self._stage_selector = StageSelector(self.capture, self.ocr, debug=self.debug)
+            self._init_retry_handler()
+
     # ------------------------------------------------------------------
     # 公共接口
     # ------------------------------------------------------------------
@@ -438,6 +463,7 @@ class ActionRecorder:
         self._initial_deployed.clear()
         self._initial_bar_state = None
         self._takeover_requested = False
+        self._probability_retry_triggered = False
         self._loaded_script_error = None
         self._reset_state()
 
@@ -1242,8 +1268,45 @@ class ActionRecorder:
         time.sleep(2.0)
 
         if self.loaded_script is not None:
-            # 预装载脚本模式：从编队界面自动进入战斗
+            # 预装载脚本模式：从编队界面自动进入战斗，然后执行脚本
             self._enter_battle_from_squad()
+            try:
+                self._execute_loaded_script()
+            except Exception as e:
+                error_msg = f"装载脚本执行异常: {e}"
+                import traceback
+                tb = traceback.format_exc()
+                # 无论是否开启 debug 都输出到控制台，避免静默吞掉错误
+                print(f"[录制器] {error_msg}")
+                print(tb)
+                self._loaded_script_error = f"{error_msg}\n{tb}"
+                self._log(error_msg)
+                self._log(tb)
+                # 尽量把游戏暂停，避免用户在不知情的情况下时间继续推进
+                try:
+                    action.press_key(self._pause_key)
+                    self.timer.pause()
+                except Exception:
+                    pass
+                # 恢复 RegionStateTimer 热键监听
+                try:
+                    self.timer.reconnect_hotkey()
+                except Exception:
+                    pass
+                # 隐藏接管按钮
+                if self._on_takeover_callback is not None:
+                    try:
+                        self._on_takeover_callback(False)
+                    except Exception:
+                        pass
+                self._script_timer_wrapper = None
+
+            with self._lock:
+                self._state = "IDLE"
+
+            # 有预装载脚本且执行完成后才启动鼠标监听器（键盘监听器已在 start() 启动）
+            if not self._stop_requested:
+                self._start_mouse_listener()
         else:
             # 1. 先截取编队界面关键帧
             try:
@@ -1258,71 +1321,25 @@ class ActionRecorder:
             except Exception as e:
                 self._log(f"预加载头像匹配器异常: {e}")
 
-        # 3. 启动计时器并等待费用条开始
-        if not self.timer.is_running():
-            self._log("启动计时器 (use_cost_detection=True)")
-            self.timer.start(use_cost_detection=True)
+            # 3. 启动计时器并等待费用条开始
+            if not self.timer.is_running():
+                self._log("启动计时器 (use_cost_detection=True)")
+                self.timer.start(use_cost_detection=True)
 
-        while not self._stop_requested:
-            info = self.timer.tick()
-            if info.get("started"):
-                # 费用条开始计时，立即截取一次完整部署区作为初始 TEAM_BAR 关键帧
-                try:
-                    team_bar_id = self._capture_team_bar_keyframe(int(info.get("elapsed_ms", 0)))
-                    self._log(f"计时器已启动 (elapsed={info['elapsed_ms']:.1f}ms)，已保存初始部署区 {team_bar_id}")
-                except Exception as e:
-                    self._log(f"初始部署区截图异常: {e}")
-
-                if self.loaded_script is not None:
-                    # 预装载脚本模式：立即暂停游戏，避免后续复制/校准期间时间继续推进
-                    self._log("计时器已启动，立即暂停游戏以准备执行装载脚本...")
-                    with self._lock:
-                        self._state = "EXECUTING_LOADED_SCRIPT"
-                    action.press_key(self._pause_key)
-                    deadline = time.perf_counter() + 1.0
-                    while time.perf_counter() < deadline and not self.timer.is_manual_paused():
-                        time.sleep(0.01)
-
-                    # 预装载脚本模式下由 _execute_loaded_script 继续处理
+            while not self._stop_requested:
+                info = self.timer.tick()
+                if info.get("started"):
+                    # 费用条开始计时，立即截取一次完整部署区作为初始 TEAM_BAR 关键帧
                     try:
-                        self._execute_loaded_script()
+                        team_bar_id = self._capture_team_bar_keyframe(int(info.get("elapsed_ms", 0)))
+                        self._log(f"计时器已启动 (elapsed={info['elapsed_ms']:.1f}ms)，已保存初始部署区 {team_bar_id}")
                     except Exception as e:
-                        error_msg = f"装载脚本执行异常: {e}"
-                        import traceback
-                        tb = traceback.format_exc()
-                        # 无论是否开启 debug 都输出到控制台，避免静默吞掉错误
-                        print(f"[录制器] {error_msg}")
-                        print(tb)
-                        self._loaded_script_error = f"{error_msg}\n{tb}"
-                        self._log(error_msg)
-                        self._log(tb)
-                        # 尽量把游戏暂停，避免用户在不知情的情况下时间继续推进
-                        try:
-                            action.press_key(self._pause_key)
-                            self.timer.pause()
-                        except Exception:
-                            pass
-                        # 恢复 RegionStateTimer 热键监听
-                        try:
-                            self.timer.reconnect_hotkey()
-                        except Exception:
-                            pass
-                        # 隐藏接管按钮
-                        if self._on_takeover_callback is not None:
-                            try:
-                                self._on_takeover_callback(False)
-                            except Exception:
-                                pass
-                        self._script_timer_wrapper = None
+                        self._log(f"初始部署区截图异常: {e}")
 
-                with self._lock:
-                    self._state = "IDLE"
-
-                # 有预装载脚本且执行完成后才启动鼠标监听器（键盘监听器已在 start() 启动）
-                if self.loaded_script is not None and not self._stop_requested:
-                    self._start_mouse_listener()
-                break
-            time.sleep(self.timer.frame_ms / 1000.0)
+                    with self._lock:
+                        self._state = "IDLE"
+                    break
+                time.sleep(self.timer.frame_ms / 1000.0)
 
         # 持续 tick，保持计时器活跃
         while not self._stop_requested:
@@ -1335,9 +1352,10 @@ class ActionRecorder:
         """预装载脚本模式下，从编队界面点击确认开始进入战斗。"""
         self._log("预装载脚本模式，自动点击进入战斗")
         try:
-            selector = StageSelector(self.capture, self.ocr, debug=self.debug)
+            if self._stage_selector is None:
+                self._stage_selector = StageSelector(self.capture, self.ocr, debug=self.debug)
             asyncio.run(
-                selector.enter_stage(
+                self._stage_selector.enter_stage(
                     self.stage_code,
                     direct_start=True,
                     should_stop=lambda: self._stop_requested,
@@ -1347,7 +1365,7 @@ class ActionRecorder:
             self._log(f"自动进入战斗异常: {e}")
 
     def _execute_loaded_script(self):
-        """执行预装载脚本 A；执行完毕或用户接管后暂停并切换到录制模式。
+        """执行预装载脚本；支持概率点失败后自动重试。
 
         使用固定 2x 的 _ScriptTimerWrapper 代替 RegionStateTimer 作为执行器
         计时器，避免视觉倍率检测滞后导致动作时间漂移。脚本结束后再把包装器
@@ -1378,15 +1396,124 @@ class ActionRecorder:
             if not (a.time_ms == 0 and a.action in (ActionType.SPEED_UP, ActionType.SPEED_DOWN))
         ]
 
+        attempt = 0
+        while not self._stop_requested and not self._takeover_requested:
+            attempt += 1
+            self._log_loaded_script(f"第 {attempt} 次执行装载脚本...")
+
+            # 重置计时器，确保每局从 0 开始
+            self.timer.reset()
+            self.timer.start(use_cost_detection=True)
+
+            # 等待费用条启动
+            started = False
+            while not self._stop_requested:
+                info = self.timer.tick()
+                if info.get("started"):
+                    started = True
+                    break
+                time.sleep(self.timer.frame_ms / 1000.0)
+            if not started:
+                self._loaded_script_error = "等待费用条启动超时"
+                break
+
+            # 暂停游戏，准备执行脚本
+            action.press_key(self._pause_key)
+            deadline = time.perf_counter() + 1.0
+            while time.perf_counter() < deadline and not self.timer.is_manual_paused():
+                time.sleep(0.01)
+
+            # 单次执行装载脚本
+            need_retry = self._execute_loaded_script_once(script_to_run)
+
+            if not need_retry:
+                # 脚本执行完毕或被接管，退出重试循环
+                break
+
+            # 概率点检查失败，需要重试
+            if not self.probability_retry_enabled:
+                self._log_loaded_script("概率点检查失败但自动重试未启用，停止执行")
+                break
+
+            self._log_loaded_script("准备重新进入关卡并再次执行...")
+            ok = asyncio.run(self._retry_probability_checkpoint())
+            if not ok:
+                self._loaded_script_error = "概率点重试进入关卡失败"
+                break
+            # 继续下一轮循环
+
+        # 脚本已执行完毕、被接管或重试失败，进入过渡状态：同步场上/部署栏状态、
+        # 导出当前部署区的实际名称与数量给离线解析器，给用户明确的等待提示。
+        with self._lock:
+            self._state = "TRANSITIONING_TO_TAKEOVER"
+        self._log("正在转为接管状态，同步部署区与场上状态...")
+
+        # 暂停游戏，切换到用户录制
+        # 先点击游戏窗口中心重新聚焦，否则悬浮窗可能抢走焦点导致暂停键失效
+        self._focus_game_window()
+        action.press_key(self._pause_key)
+        # 监听器已注销，直接手动暂停底层计时器
+        self.timer.pause()
+        deadline = time.perf_counter() + 1.0
+        while time.perf_counter() < deadline and not self.timer.is_manual_paused():
+            time.sleep(0.01)
+
+        # 记录已执行的操作（用于最终合并）：非接管时认为脚本已完整执行
+        if not self._takeover_requested:
+            self._executed_actions = [
+                a.model_copy(deep=True) for a in script_to_run.actions
+            ]
+        else:
+            # 接管时只保留已经执行完的部分：使用包装器时间更准确地判断
+            wrapper = self._script_timer_wrapper
+            if wrapper is not None:
+                current_ms = wrapper.get_elapsed_ms()
+            else:
+                current_ms = self.timer.get_elapsed_ms()
+            self._executed_actions = [
+                a.model_copy(deep=True)
+                for a in script_to_run.actions
+                if a.time_ms <= current_ms
+            ]
+
+        # 脚本结束，切换回 RegionStateTimer 作为时间源
+        self._script_timer_wrapper = None
+
+        # 通知 UI 恢复录制按钮
+        if self._on_takeover_callback is not None:
+            self._on_takeover_callback(False)
+
+        # 恢复 RegionStateTimer 的键盘监听器，以便用户继续录制时暂停键生效
+        try:
+            self.timer.reconnect_hotkey()
+        except Exception as e:
+            self._log(f"重连计时器键盘监听器异常: {e}")
+
+        self._log(
+            f"预装载脚本执行结束，已执行 {len(self._executed_actions)} 个操作，"
+            f"接管={self._takeover_requested}"
+        )
+
+    def _execute_loaded_script_once(self, script_to_run: ScriptModel) -> bool:
+        """单次执行装载脚本。
+
+        调用前要求游戏已暂停、RegionStateTimer 已启动。
+        返回 True 表示概率点检查失败，需要重新进入关卡重试。
+        """
         # 创建 ScriptExecutor，使用固定倍率计时器包装器，避免 RegionStateTimer
         # 在 pause/resume 后倍率检测滞后导致的时间漂移。
         wrapper = _ScriptTimerWrapper(
             self.timer, rate=constants.FAST2X_RATE, debug=self.debug_loaded_script
         )
         self._script_timer_wrapper = wrapper
-        executor = ScriptExecutor(self.capture, self.ocr, action, debug=self.debug_loaded_script)
+        executor = ScriptExecutor(
+            self.capture, self.ocr, action,
+            debug=self.debug_loaded_script,
+            debug_skill_status=self.debug_skill_status,
+        )
         executor.timer = wrapper
         executor.on_timer_adjusted = self._on_timer_adjusted_callback
+        executor.on_special_behavior_failed = lambda: self._on_probability_checkpoint_failed(executor)
 
         # 费用条同步：普通模式使用 10s 前后不同校准表，合约 tag 使用单表
         if self._cost_bar_calibration_name:
@@ -1421,7 +1548,7 @@ class ActionRecorder:
         # 但仍会被 pause/resume 的按键延迟带偏，需要费用条把每个动作后拉回来。
 
         # ---- 二倍速启动 ----
-        # 进入本函数时游戏已由 _wait_for_timer_start 暂停，稍作稳定后直接读取当前时间。
+        # 进入本函数时游戏已暂停，稍作稳定后直接读取当前时间。
         # 装载脚本模式下计时器已通过费用条启动检测启动，不再用 calibrate_timer_at_pause
         # 做帧级校准，避免费用条周期歧义导致初始漂移。
         self._log_loaded_script("游戏已暂停，读取计时器当前点...")
@@ -1473,12 +1600,6 @@ class ActionRecorder:
                 f"同步回 RegionStateTimer 后 elapsed={self.timer.get_elapsed_ms():.1f}"
             )
 
-        # 脚本已执行完毕或被接管，进入过渡状态：同步场上/部署栏状态、
-        # 导出当前部署区的实际名称与数量给离线解析器，给用户明确的等待提示。
-        with self._lock:
-            self._state = "TRANSITIONING_TO_TAKEOVER"
-        self._log("正在转为接管状态，同步部署区与场上状态...")
-
         # 同步脚本执行后的场上部署状态到录制器，
         # 这样用户后续进行撤退/技能操作时才能正确选中已部署单位。
         pool = getattr(executor, "pool", None)
@@ -1503,47 +1624,13 @@ class ActionRecorder:
                 f"slots={[s['name'] for s in self._initial_bar_state]}"
             )
 
-        # 暂停游戏，切换到用户录制
-        # 先点击游戏窗口中心重新聚焦，否则悬浮窗可能抢走焦点导致暂停键失效
-        self._focus_game_window()
-        action.press_key(self._pause_key)
-        # 监听器已注销，直接手动暂停底层计时器
-        self.timer.pause()
-        deadline = time.perf_counter() + 1.0
-        while time.perf_counter() < deadline and not self.timer.is_manual_paused():
-            time.sleep(0.01)
-
-        # 记录已执行的操作（用于最终合并）
-        if not self._takeover_requested:
-            self._executed_actions = [
-                a.model_copy(deep=True) for a in script_to_run.actions
-            ]
-        else:
-            # 接管时只保留已经执行完的部分：使用包装器时间更准确地判断
-            current_ms = wrapper.get_elapsed_ms()
-            self._executed_actions = [
-                a.model_copy(deep=True)
-                for a in script_to_run.actions
-                if a.time_ms <= current_ms
-            ]
-
-        # 脚本结束，切换回 RegionStateTimer 作为时间源
-        self._script_timer_wrapper = None
-
-        # 通知 UI 恢复录制按钮
-        if self._on_takeover_callback is not None:
-            self._on_takeover_callback(False)
-
-        # 恢复 RegionStateTimer 的键盘监听器，以便用户继续录制时暂停键生效
-        try:
-            self.timer.reconnect_hotkey()
-        except Exception as e:
-            self._log(f"重连计时器键盘监听器异常: {e}")
-
-        self._log(
-            f"预装载脚本执行结束，已执行 {len(self._executed_actions)} 个操作，"
-            f"接管={self._takeover_requested}"
-        )
+        # 返回是否需要概率点重试
+        if self._takeover_requested or self._stop_requested:
+            return False
+        if self._probability_retry_triggered:
+            self._probability_retry_triggered = False
+            return True
+        return False
 
     async def _run_executor_with_takeover(self, executor: ScriptExecutor):
         """在 executor 运行的同时轮询接管/停止请求。"""
@@ -1573,6 +1660,62 @@ class ActionRecorder:
     def set_timer_adjusted_callback(self, callback: Optional[Callable[[], None]]):
         """设置计时器主动调整后的回调，用于即时刷新悬浮窗显示。"""
         self._on_timer_adjusted_callback = callback
+
+    # ------------------------------------------------------------------
+    # 概率点自动凸图
+    # ------------------------------------------------------------------
+    def _init_retry_handler(self):
+        """初始化关卡重试处理器，用于概率点失败后重新进入关卡。"""
+        try:
+            template_path = str(game_template("loss.png"))
+            failed_template_path = str(game_template("failed.png"))
+            mission_end_template_path = str(game_template("retry.png"))
+            self._retry_handler = StageRetryHandler(
+                self.capture,
+                self._stage_selector,
+                template_path=template_path,
+                failed_template_path=failed_template_path,
+                mission_end_template_path=mission_end_template_path,
+                debug=self.debug,
+            )
+            self._log("概率点重试处理器已初始化")
+        except Exception as e:
+            self._log(f"概率点重试处理器初始化失败: {e}")
+            self._retry_handler = None
+
+    def _on_probability_checkpoint_failed(self, executor: ScriptExecutor):
+        """概率点检查失败回调：标记需要重试并停止当前执行器。"""
+        if not self.probability_retry_enabled:
+            return
+        self._probability_retry_triggered = True
+        executor._stop_event.set()
+        self._log_loaded_script("概率点检查失败，将重新进入关卡并再次执行脚本")
+
+    async def _retry_probability_checkpoint(self) -> bool:
+        """执行概率点失败后的重试：退出当前关卡并重新进入。"""
+        if self._retry_handler is None:
+            self._log("概率点重试处理器未初始化，无法重试")
+            return False
+        self._log("开始概率点重试流程：退出关卡并重新进入...")
+        try:
+            ok = await self._retry_handler.handle_leak_once(
+                self.stage_code,
+                should_stop=lambda: self._stop_requested,
+                challenge_mode=self.challenge_mode,
+                sand_table=self.sand_table,
+                borrow_support=self.support_count > 0,
+                support_friend_index=self.support_friend_index,
+                support_skill=self.support_skill,
+                support_module=self.support_module,
+            )
+            if ok:
+                self._log("概率点重试：重新进入关卡成功")
+            else:
+                self._log("概率点重试：重新进入关卡失败")
+            return ok
+        except Exception as e:
+            self._log(f"概率点重试异常: {e}")
+            return False
 
     def _now_ms(self) -> float:
         t = self._get_time_ms()

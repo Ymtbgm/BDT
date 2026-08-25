@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from core.base.paths import gui_template
+from models.script_schema import ScriptModel
 def _prepare_bg_pixmap(pixmap: QPixmap, opacity: float = 0.35) -> QPixmap:
     """对背景图降低不透明度，产生透明感，保留透明通道。"""
     if pixmap.isNull():
@@ -197,6 +198,7 @@ class ExecTab(QWidget):
         self.main_window.combo_cost_tag.addItem("费用回复降低25%", "cc_25")
         self.main_window.combo_cost_tag.addItem("费用回复降低50%", "cc_50")
         self.main_window.combo_cost_tag.addItem("费用回复降低75%", "cc_75")
+        self.main_window.combo_cost_tag.addItem("费用不自然回复", "no_regen")
         contract_layout.addWidget(self.main_window.combo_cost_tag)
 
         contract_layout.addStretch()
@@ -457,6 +459,38 @@ class ExecTab(QWidget):
         if not script_path:
             QMessageBox.warning(self.main_window, "警告", "请先选择脚本文件")
             return
+
+        try:
+            with open(script_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            script = ScriptModel.model_validate(data)
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "脚本加载失败",
+                f"无法读取脚本 {script_path}:\n{e}",
+            )
+            return
+
+        dir_issues = script.validate_deploy_directions()
+        if dir_issues:
+            dir_lines = []
+            for time_ms, category, name in dir_issues:
+                s, f = self.main_window._ms_to_sf(time_ms)
+                dir_lines.append(f"{s}秒第{f}帧：{category} {name} 部署缺少方向")
+            msg = QMessageBox(self.main_window)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("脚本校验警告")
+            msg.setText(
+                "以下部署动作缺少方向参数（干员必须填写；道具/召唤物因半数以上部署有方向，视为需要方向）：\n"
+                + "\n".join(dir_lines)
+            )
+            run_btn = msg.addButton("继续执行", QMessageBox.ButtonRole.AcceptRole)
+            cancel_btn = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(cancel_btn)
+            msg.exec()
+            if msg.clickedButton() != run_btn:
+                return
 
         self.main_window._save_config()
         self._init_error_shown = False

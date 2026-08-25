@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QSpinBox, QCheckBox,
     QGroupBox, QListWidget, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QMessageBox, QFileDialog, QComboBox,
-    QApplication, QInputDialog,
+    QApplication, QInputDialog, QDialog, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QMetaObject, Q_ARG, QThread
 
@@ -26,6 +26,121 @@ from gui._window_effects import (
 from gui.info_collection_overlay import InfoCollectionOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ItemInfo, ScriptModel
+
+
+class ProbabilityRetryConfigDialog(QDialog):
+    """录制器装载脚本时的概率点自动凸图配置对话框。"""
+
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle("概率点配置")
+        self.setMinimumWidth(300)
+        self._config = config or {}
+        self._build_ui()
+        self._load_config()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        mode_layout = QHBoxLayout()
+        self.chk_challenge_mode = QCheckBox("突袭模式")
+        self.chk_sand_table = QCheckBox("沙盘推演")
+        self.chk_challenge_mode.stateChanged.connect(self._on_challenge_changed)
+        self.chk_sand_table.stateChanged.connect(self._on_sand_table_changed)
+        mode_layout.addWidget(self.chk_challenge_mode)
+        mode_layout.addWidget(self.chk_sand_table)
+        mode_layout.addStretch()
+        layout.addLayout(mode_layout)
+
+        support_group = QGroupBox("助战参数")
+        support_layout = QHBoxLayout(support_group)
+        self.chk_borrow_support = QCheckBox("借用助战干员")
+        self.chk_borrow_support.stateChanged.connect(self._on_borrow_support_changed)
+        support_layout.addWidget(self.chk_borrow_support)
+
+        support_layout.addWidget(QLabel("好友位置"))
+        self.spin_friend_index = QSpinBox()
+        self.spin_friend_index.setRange(0, 8)
+        support_layout.addWidget(self.spin_friend_index)
+
+        support_layout.addWidget(QLabel("携带技能"))
+        self.combo_skill = QComboBox()
+        self.combo_skill.addItems(["1", "2", "3"])
+        support_layout.addWidget(self.combo_skill)
+
+        support_layout.addWidget(QLabel("模组选择"))
+        self.combo_module = QComboBox()
+        self.combo_module.addItems(["1", "2", "3"])
+        support_layout.addWidget(self.combo_module)
+        support_layout.addStretch()
+        layout.addWidget(support_group)
+
+        hint = QLabel(
+            "此处配置关卡重开信息，概率点信息请在脚本编辑中打开脚本，添加“概率点检查”完成配置。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _load_config(self):
+        challenge_mode = self._config.get("challenge_mode", False)
+        sand_table = self._config.get("sand_table", False)
+        # 突袭与沙盘互斥，同时开启时优先关闭沙盘推演
+        if challenge_mode and sand_table:
+            sand_table = False
+        self.chk_challenge_mode.setChecked(challenge_mode)
+        self.chk_sand_table.setChecked(sand_table)
+
+        borrow_support = self._config.get("borrow_support", False)
+        self.chk_borrow_support.setChecked(borrow_support)
+        self.spin_friend_index.setValue(self._config.get("support_friend_index", 0))
+        skill_idx = max(0, min(2, self._config.get("support_skill", 1) - 1))
+        self.combo_skill.setCurrentIndex(skill_idx)
+        module_idx = max(0, min(2, self._config.get("support_module", 1) - 1))
+        self.combo_module.setCurrentIndex(module_idx)
+        self._on_borrow_support_changed(self.chk_borrow_support.checkState())
+
+    def _on_challenge_changed(self, state):
+        if isinstance(state, Qt.CheckState):
+            checked = state == Qt.CheckState.Checked
+        else:
+            checked = state == Qt.CheckState.Checked.value
+        if checked:
+            self.chk_sand_table.setChecked(False)
+
+    def _on_sand_table_changed(self, state):
+        if isinstance(state, Qt.CheckState):
+            checked = state == Qt.CheckState.Checked
+        else:
+            checked = state == Qt.CheckState.Checked.value
+        if checked:
+            self.chk_challenge_mode.setChecked(False)
+
+    def _on_borrow_support_changed(self, state):
+        if isinstance(state, Qt.CheckState):
+            enabled = state == Qt.CheckState.Checked
+        else:
+            enabled = state == Qt.CheckState.Checked.value
+        self.spin_friend_index.setEnabled(enabled)
+        self.combo_skill.setEnabled(enabled)
+        self.combo_module.setEnabled(enabled)
+
+    def get_config(self):
+        return {
+            "challenge_mode": self.chk_challenge_mode.isChecked(),
+            "sand_table": self.chk_sand_table.isChecked(),
+            "borrow_support": self.chk_borrow_support.isChecked(),
+            "support_friend_index": self.spin_friend_index.value(),
+            "support_skill": int(self.combo_skill.currentText()),
+            "support_module": int(self.combo_module.currentText()),
+        }
 
 
 class RecorderTab(QWidget):
@@ -105,8 +220,33 @@ class RecorderTab(QWidget):
             "装载脚本执行期间，按下该快捷键可立即手动接管，进入用户录制模式。"
         )
         row.addWidget(self.main_window.rec_takeover_hotkey)
+
+        self.main_window.rec_chk_probability_retry = QCheckBox("概率点配置")
+        self.main_window.rec_chk_probability_retry.setToolTip(
+            "装载脚本执行期间，若概率点检查失败则自动退出并重新进入关卡，直到所有概率点通过。"
+        )
+        self.main_window.rec_chk_probability_retry.stateChanged.connect(self._on_probability_retry_changed)
+        row.addWidget(self.main_window.rec_chk_probability_retry)
+
+        self.main_window.btn_rec_probability_config = QPushButton("配置")
+        self.main_window.btn_rec_probability_config.setEnabled(False)
+        self.main_window.btn_rec_probability_config.setToolTip(
+            "配置概率点重试时的突袭/沙盘/助战参数。"
+        )
+        self.main_window.btn_rec_probability_config.clicked.connect(self._open_probability_config)
+        row.addWidget(self.main_window.btn_rec_probability_config)
         row.addStretch()
         param_layout.addLayout(row)
+
+        # 概率点重试配置缓存（不写入脚本，仅作为运行时选项）
+        self._probability_retry_config = {
+            "challenge_mode": False,
+            "sand_table": False,
+            "borrow_support": False,
+            "support_friend_index": 0,
+            "support_skill": 1,
+            "support_module": 1,
+        }
 
         row = QHBoxLayout()
         row.addWidget(QLabel("费用条 tag:"))
@@ -115,6 +255,7 @@ class RecorderTab(QWidget):
         self.main_window.rec_cost_tag.addItem("费用回复降低25%", "cc_25")
         self.main_window.rec_cost_tag.addItem("费用回复降低50%", "cc_50")
         self.main_window.rec_cost_tag.addItem("费用回复降低75%", "cc_75")
+        self.main_window.rec_cost_tag.addItem("费用不自然回复", "no_regen")
         self.main_window.rec_cost_tag.setToolTip(
             "选择关卡的费用条校准 tag；通常只有危机合约/特殊关卡需要选择。"
         )
@@ -131,6 +272,7 @@ class RecorderTab(QWidget):
         self.main_window.combo_rec_debug.add_item("离线识别", "resolver")
         self.main_window.combo_rec_debug.add_item("调试截图", "screenshot")
         self.main_window.combo_rec_debug.add_item("脚本装载执行", "loaded_script")
+        self.main_window.combo_rec_debug.add_item("技能状态检测", "skill_status")
         self.main_window.combo_rec_debug.setToolTip(
             "勾选需要打印日志或保存截图的调试项，可多选。"
         )
@@ -234,6 +376,7 @@ class RecorderTab(QWidget):
         self.main_window.rec_chk_support_op.stateChanged.connect(self.main_window._save_config)
         self.main_window.rec_chk_support_op.stateChanged.connect(self._sync_recorder_counts)
         self.main_window.rec_takeover_hotkey.textChanged.connect(self.main_window._save_config)
+        self.main_window.rec_chk_probability_retry.stateChanged.connect(self.main_window._save_config)
         self.main_window.rec_loaded_script_path.textChanged.connect(self._update_loaded_script_status)
 
         # 使用说明
@@ -373,6 +516,21 @@ class RecorderTab(QWidget):
             self.main_window._recorder.take_over()
             self.main_window.rec_status.setText("状态: 已请求手动接管")
 
+    def _on_probability_retry_changed(self, state):
+        """概率点配置勾选框状态变化：启用/禁用配置按钮。"""
+        if isinstance(state, Qt.CheckState):
+            checked = state == Qt.CheckState.Checked
+        else:
+            checked = state == Qt.CheckState.Checked.value
+        self.main_window.btn_rec_probability_config.setEnabled(checked)
+
+    def _open_probability_config(self):
+        """打开概率点重试配置对话框。"""
+        dialog = ProbabilityRetryConfigDialog(self.main_window, self._probability_retry_config)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._probability_retry_config = dialog.get_config()
+            self.main_window._save_config()
+
     def _sync_recorder_counts(self):
         """录制参数中的初始干员/道具/助战变更时同步到运行中的录制器。"""
         recorder = getattr(self.main_window, "_recorder", None)
@@ -427,21 +585,36 @@ class RecorderTab(QWidget):
                 )
                 return
 
+            warning_parts = []
             script_operator_count = len(loaded_script.operators or [])
             script_item_count = len(loaded_script.items or [])
             if (
                 script_operator_count != initial_operator_count
                 or script_item_count != initial_item_count
             ):
-                msg = QMessageBox(self.main_window)
-                msg.setIcon(QMessageBox.Icon.Warning)
-                msg.setWindowTitle("初始数量不一致")
-                msg.setText(
-                    f"装载脚本的初始数量与当前录制参数不一致，请检查。\n\n"
+                warning_parts.append(
+                    f"装载脚本的初始数量与当前录制参数不一致，请检查。\n"
                     f"脚本：干员 {script_operator_count} 个，道具 {script_item_count} 个\n"
-                    f"当前参数：干员 {initial_operator_count} 个，道具 {initial_item_count} 个\n\n"
+                    f"当前参数：干员 {initial_operator_count} 个，道具 {initial_item_count} 个\n"
                     f"若继续执行，部署栏点击位置可能与脚本预期不符。"
                 )
+
+            dir_issues = loaded_script.validate_deploy_directions()
+            if dir_issues:
+                dir_lines = []
+                for time_ms, category, name in dir_issues:
+                    s, f = self.main_window._ms_to_sf(time_ms)
+                    dir_lines.append(f"{s}秒第{f}帧：{category} {name} 部署缺少方向")
+                warning_parts.append(
+                    "以下部署动作缺少方向参数（干员必须填写；道具/召唤物因半数以上部署有方向，视为需要方向）：\n"
+                    + "\n".join(dir_lines)
+                )
+
+            if warning_parts:
+                msg = QMessageBox(self.main_window)
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setWindowTitle("脚本校验警告")
+                msg.setText("\n\n".join(warning_parts))
                 execute_btn = msg.addButton("直接执行", QMessageBox.ButtonRole.AcceptRole)
                 edit_btn = msg.addButton("返回编辑", QMessageBox.ButtonRole.RejectRole)
                 msg.setDefaultButton(edit_btn)
@@ -459,6 +632,7 @@ class RecorderTab(QWidget):
         rec_debug_resolver = "resolver" in debug_keys
         rec_debug_screenshot = "screenshot" in debug_keys
         rec_debug_loaded_script = "loaded_script" in debug_keys
+        rec_debug_skill_status = "skill_status" in debug_keys
 
         try:
             self.main_window._recorder_capture = WindowCapture(
@@ -507,6 +681,8 @@ class RecorderTab(QWidget):
             self.main_window.log_text.append(line)
             QApplication.processEvents()
 
+        probability_retry_enabled = self.main_window.rec_chk_probability_retry.isChecked()
+        retry_cfg = self._probability_retry_config
         self.main_window._recorder = ActionRecorder(
             capture=self.main_window._recorder_capture,
             timer=self.main_window._region_timer,
@@ -516,6 +692,7 @@ class RecorderTab(QWidget):
             debug_resolver=rec_debug_resolver,
             debug_screenshot=rec_debug_screenshot,
             debug_loaded_script=rec_debug_loaded_script,
+            debug_skill_status=rec_debug_skill_status,
             initial_operator_count=initial_operator_count,
             initial_item_count=initial_item_count,
             support_count=support_count,
@@ -527,6 +704,12 @@ class RecorderTab(QWidget):
             resolver_log_callback=_resolver_log if rec_debug_resolver else None,
             loaded_script=loaded_script,
             loaded_script_path=loaded_script_path,
+            probability_retry_enabled=probability_retry_enabled,
+            challenge_mode=retry_cfg.get("challenge_mode", False),
+            sand_table=retry_cfg.get("sand_table", False),
+            support_friend_index=retry_cfg.get("support_friend_index", 0),
+            support_skill=retry_cfg.get("support_skill", 1),
+            support_module=retry_cfg.get("support_module", 1),
         )
         def _on_takeover_mode_changed(show: bool):
             # 录制器回调可能来自非主线程（键盘监听/脚本执行线程），

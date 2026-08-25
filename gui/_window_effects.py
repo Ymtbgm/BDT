@@ -84,10 +84,12 @@ def set_window_topmost(widget, topmost: bool = True) -> bool:
 
         SWP_NOSIZE = 0x0001
         SWP_NOMOVE = 0x0002
-        # 参考 VBnet FAQ：只用 NOMOVE|NOSIZE，避免激活窗口导致 Z 序变化
+        SWP_NOACTIVATE = 0x0010
+        # 参考 VBnet FAQ：只用 NOMOVE|NOSIZE，并附加 NOACTIVATE，
+        # 避免重新置顶时抢夺其他窗口的键盘输入焦点。
         result = user32.SetWindowPos(
             hwnd, pos_flag, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
         return result != 0
     except Exception as e:
