@@ -1,5 +1,6 @@
 import os
 import shutil
+from datetime import datetime
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -9,6 +10,7 @@ from PyQt6.QtWidgets import (
 
 from core.base.paths import game_data
 from core.update.levels_updater import LevelsUpdater, UpdateError
+from gui.tabs._ui_utils import set_group_box_style
 from gui.workers.levels_update_worker import LevelsUpdateWorker
 from gui.widgets.toast import Toast
 
@@ -24,10 +26,18 @@ class ResourceTab(QWidget):
         return self.main_window._project_root()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
+        main_layout.setSpacing(12)
+
+        # 左侧：操作区
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
 
         # ---- levels.json 手动更新 ----
         manual_group = QGroupBox("levels.json 手动更新")
+        set_group_box_style(manual_group)
         manual_layout = QVBoxLayout(manual_group)
         manual_layout.addWidget(
             QLabel("选择新的 levels.json 文件，点击更新后将会覆盖 resource/game_data/levels.json")
@@ -48,10 +58,11 @@ class ResourceTab(QWidget):
 
         self.main_window.resource_status = QLabel("状态: 未更新")
         manual_layout.addWidget(self.main_window.resource_status)
-        layout.addWidget(manual_group)
+        left_layout.addWidget(manual_group)
 
         # ---- levels.json 自动更新 ----
         auto_group = QGroupBox("levels.json 自动更新")
+        set_group_box_style(auto_group)
         auto_layout = QVBoxLayout(auto_group)
 
         self.main_window.chk_levels_auto_update = QCheckBox("启动时自动检查更新")
@@ -87,14 +98,69 @@ class ResourceTab(QWidget):
 
         self.main_window.label_levels_update_status = QLabel("状态: 未检查")
         auto_layout.addWidget(self.main_window.label_levels_update_status)
-        layout.addWidget(auto_group)
+        left_layout.addWidget(auto_group)
 
-        layout.addStretch()
+        left_layout.addStretch()
+        main_layout.addWidget(left_widget, 1)
+
+        # 右侧：资源状态
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+
+        status_group = QGroupBox("当前资源状态")
+        set_group_box_style(status_group)
+        status_layout = QVBoxLayout(status_group)
+        self._label_levels_path = QLabel()
+        self._label_levels_mtime = QLabel()
+        self._label_levels_size = QLabel()
+        self._label_levels_count = QLabel()
+        status_layout.addWidget(self._label_levels_path)
+        status_layout.addWidget(self._label_levels_mtime)
+        status_layout.addWidget(self._label_levels_size)
+        status_layout.addWidget(self._label_levels_count)
+        status_layout.addStretch()
+        right_layout.addWidget(status_group)
+
+        refresh_btn = QPushButton("刷新状态")
+        refresh_btn.clicked.connect(self._refresh_status)
+        right_layout.addWidget(refresh_btn)
+        right_layout.addStretch()
+
+        main_layout.addWidget(right_widget, 1)
+
+        self._refresh_status()
 
     def _browse_resource(self):
         path, _ = QFileDialog.getOpenFileName(self.main_window, "选择 levels.json", "", "JSON (*.json)")
         if path:
             self.main_window.resource_path.setText(path)
+
+    def _refresh_status(self):
+        """刷新 levels.json 文件信息。"""
+        path = str(game_data("levels.json"))
+        if os.path.exists(path):
+            stat = os.stat(path)
+            mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            size = stat.st_size / 1024
+            size_str = f"{size:.1f} KB" if size < 1024 else f"{size / 1024:.2f} MB"
+            try:
+                import json
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                count = len(data) if isinstance(data, list) else 0
+            except Exception:
+                count = -1
+            self._label_levels_path.setText(f"路径: {path}")
+            self._label_levels_mtime.setText(f"修改时间: {mtime}")
+            self._label_levels_size.setText(f"文件大小: {size_str}")
+            self._label_levels_count.setText(f"关卡数量: {count if count >= 0 else '解析失败'}")
+        else:
+            self._label_levels_path.setText(f"路径: {path}")
+            self._label_levels_mtime.setText("文件状态: 不存在")
+            self._label_levels_size.setText("")
+            self._label_levels_count.setText("")
 
     def _update_resource(self):
         src = self.main_window.resource_path.text()
@@ -105,6 +171,7 @@ class ResourceTab(QWidget):
         try:
             shutil.copy2(src, dst)
             self.main_window.resource_status.setText(f"状态: 更新成功 -> {dst}")
+            self._refresh_status()
             QMessageBox.information(self.main_window, "成功", f"已更新 levels.json\n目标: {dst}")
         except Exception as e:
             self.main_window.resource_status.setText(f"状态: 更新失败 - {e}")
@@ -184,6 +251,7 @@ class ResourceTab(QWidget):
         if success:
             self.main_window.label_levels_update_status.setText(f"状态: {message}")
             self.main_window.resource_status.setText("状态: 已通过自动更新同步")
+            self._refresh_status()
             if silent:
                 Toast.show_message(
                     self.main_window,

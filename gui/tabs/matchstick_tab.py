@@ -1,6 +1,9 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QTextEdit,
+    QGroupBox,
 )
+
+from gui.tabs._ui_utils import set_group_box_icon
 
 
 class MatchstickTab(QWidget):
@@ -11,6 +14,13 @@ class MatchstickTab(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+
+        # 键位设置
+        keys_group = QGroupBox("键位设置")
+        set_group_box_icon(keys_group, "keyboard.png")
+        keys_layout = QVBoxLayout(keys_group)
+        keys_layout.setContentsMargins(6, 6, 6, 6)
+        keys_layout.setSpacing(6)
 
         # 操作行：选中干员
         row_select = QHBoxLayout()
@@ -24,7 +34,7 @@ class MatchstickTab(QWidget):
         self.main_window.line_matchstick_select.textChanged.connect(self.main_window._on_matchstick_hotkey_changed)
         row_select.addWidget(self.main_window.line_matchstick_select)
         row_select.addStretch()
-        layout.addLayout(row_select)
+        keys_layout.addLayout(row_select)
 
         # 操作行：过 166ms
         row_166 = QHBoxLayout()
@@ -38,7 +48,7 @@ class MatchstickTab(QWidget):
         self.main_window.line_matchstick_166.textChanged.connect(self.main_window._on_matchstick_hotkey_changed)
         row_166.addWidget(self.main_window.line_matchstick_166)
         row_166.addStretch()
-        layout.addLayout(row_166)
+        keys_layout.addLayout(row_166)
 
         # 操作行：过 50ms
         row_50 = QHBoxLayout()
@@ -52,14 +62,16 @@ class MatchstickTab(QWidget):
         self.main_window.line_matchstick_50.textChanged.connect(self.main_window._on_matchstick_hotkey_changed)
         row_50.addWidget(self.main_window.line_matchstick_50)
         row_50.addStretch()
-        layout.addLayout(row_50)
+        keys_layout.addLayout(row_50)
+
+        layout.addWidget(keys_group)
 
         # 说明文本
         info = QTextEdit()
         info.setReadOnly(True)
         info.setHtml(
             """
-            <h3>划火柴快捷键</h3>
+            <h3>使用说明</h3>
             <p>在此绑定全局热键，开启后可在游戏中快速执行划火柴操作，为了减小电脑端误差，<span style="color: red;">所有操作请在子弹时间下进行</span>，否则不是刚好过1帧和0帧选取。</p>
             <ul>
                 <li><b>选中干员</b>：用于选中鼠标指向的干员/装置。</li>

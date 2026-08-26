@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QProgressBar,
 )
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QPixmap, QPainter
 
 import action
 from core.capture.capture import WindowCapture
@@ -30,7 +30,6 @@ from gui.tabs import (
     MatchstickTab,
     TimerTab,
     RecorderTab,
-    GuideTab,
 )
 
 if TYPE_CHECKING:
@@ -40,7 +39,6 @@ if TYPE_CHECKING:
     from gui.tabs.matchstick_tab import MatchstickTab
     from gui.tabs.timer_tab import TimerTab
     from gui.tabs.recorder_tab import RecorderTab
-    from gui.tabs.guide_tab import GuideTab
 
 
 class MainWindow(QMainWindow):
@@ -51,7 +49,6 @@ class MainWindow(QMainWindow):
     matchstick_tab: MatchstickTab
     timer_tab: TimerTab
     recorder_tab: RecorderTab
-    guide_tab: GuideTab
 
     # 脚本执行 Tab
     exec_script_path: QLineEdit
@@ -63,6 +60,7 @@ class MainWindow(QMainWindow):
     chk_challenge_mode: QCheckBox
     chk_speed2x: QCheckBox
     chk_borrow_support: QCheckBox
+    btn_support_config: QPushButton
     spin_support_friend: QSpinBox
     combo_support_skill: QComboBox
     combo_support_module: QComboBox
@@ -196,8 +194,8 @@ class MainWindow(QMainWindow):
             ]
             _icon_path = next((p for p in _icon_candidates if os.path.exists(p)), _icon_path)
         self.setWindowIcon(QIcon(_icon_path))
-        self.resize(1600, 900)
-        self.setMinimumWidth(1280)
+        self.resize(1080, 608)
+        self.setMinimumWidth(1020)
         self.script = ScriptModel(stage_code="1-7")
         self._applying_edit = False
         self._selecting = False
@@ -559,30 +557,54 @@ class MainWindow(QMainWindow):
             )
         self._save_config()
 
+    def _tab_icon(self, filename: str, size: int = 25, offset_y: int = 0) -> QIcon:
+        """加载并缩放 ui_icons 目录下的图标，统一成相同大小；offset_y 可向下微调。"""
+        icon_path = str(gui_template("ui_icons") / filename)
+        pixmap = QPixmap(icon_path)
+        if pixmap.isNull():
+            return QIcon()
+        scaled = pixmap.scaled(
+            size, size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        if offset_y == 0:
+            return QIcon(scaled)
+        # 整体画布略大，把图标向下偏移 offset_y 像素
+        target = QPixmap(size, size + offset_y)
+        target.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(target)
+        painter.drawPixmap(0, offset_y, scaled)
+        painter.end()
+        return QIcon(target)
+
     def _build_ui(self):
         tabs = QTabWidget()
         self.setCentralWidget(tabs)
 
         self.exec_tab = ExecTab(self)
         tabs.addTab(self.exec_tab, "脚本执行")
+        tabs.setTabIcon(tabs.indexOf(self.exec_tab), self._tab_icon("execute.png"))
 
         self.editor_tab = EditorTab(self)
         tabs.addTab(self.editor_tab, "脚本编辑")
+        tabs.setTabIcon(tabs.indexOf(self.editor_tab), self._tab_icon("edit.png", offset_y=3))
 
         self.resource_tab = ResourceTab(self)
         tabs.addTab(self.resource_tab, "资源更新")
+        tabs.setTabIcon(tabs.indexOf(self.resource_tab), self._tab_icon("update_file.png"))
 
         self.matchstick_tab = MatchstickTab(self)
         tabs.addTab(self.matchstick_tab, "划火柴")
+        tabs.setTabIcon(tabs.indexOf(self.matchstick_tab), self._tab_icon("match.png"))
 
         self.timer_tab = TimerTab(self)
         tabs.addTab(self.timer_tab, "计时器")
+        tabs.setTabIcon(tabs.indexOf(self.timer_tab), self._tab_icon("timer.png", offset_y=3))
 
         self.recorder_tab = RecorderTab(self)
         tabs.addTab(self.recorder_tab, "操作录制")
-
-        self.guide_tab = GuideTab(self)
-        tabs.addTab(self.guide_tab, "使用指南")
+        tabs.setTabIcon(tabs.indexOf(self.recorder_tab), self._tab_icon("record.png"))
 
         # 所有 UI 控件创建完成后再加载配置，避免信号处理时访问未创建的控件
         self._apply_config(self._load_config())

@@ -6,11 +6,12 @@ from gui._window_effects import (
     set_window_topmost,
     set_tool_window_style,
 )
+from gui.tabs._ui_utils import set_group_box_icon
 from gui.timer_overlay import TimerOverlay
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QComboBox,
-    QSizePolicy, QTextEdit, QMessageBox,
+    QGroupBox, QSizePolicy, QTextEdit, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -50,9 +51,6 @@ class TimerTab(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        self.main_window.chk_timer_debug = QCheckBox("Debug 输出")
-        layout.addWidget(self.main_window.chk_timer_debug)
-
         self.main_window.chk_timer_high_perf = QCheckBox("高精度模式")
         self.main_window.chk_timer_high_perf.setToolTip(
             "启用独立 TimeKeeper 线程和 1ms 系统定时器分辨率，"
@@ -62,18 +60,30 @@ class TimerTab(QWidget):
         )
         layout.addWidget(self.main_window.chk_timer_high_perf)
 
+        debug_group = QGroupBox("Debug")
+        set_group_box_icon(debug_group, "debug.png")
+        debug_layout = QHBoxLayout(debug_group)
+        debug_layout.setContentsMargins(6, 6, 6, 6)
+        self.main_window.chk_timer_debug = QCheckBox("Debug 输出")
+        debug_layout.addWidget(QLabel("Debug输出"))
+        debug_layout.addWidget(self.main_window.chk_timer_debug)
+        debug_layout.addStretch()
+        layout.addWidget(debug_group)
+
+        contract_group = QGroupBox("计时器费用条 tag")
+        set_group_box_icon(contract_group, "warning.png")
+        contract_layout = QHBoxLayout(contract_group)
+        contract_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.combo_timer_cost_tag = QComboBox()
         self.main_window.combo_timer_cost_tag.addItem("无", "")
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低25%", "cc_25")
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低50%", "cc_50")
         self.main_window.combo_timer_cost_tag.addItem("费用回复降低75%", "cc_75")
         self.main_window.combo_timer_cost_tag.addItem("费用不自然回复", "no_regen")
-        self.main_window.combo_timer_cost_tag.setMaximumWidth(200)
-        self.main_window.combo_timer_cost_tag.setSizePolicy(
-            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
-        )
-        layout.addWidget(QLabel("计时器费用条 tag"))
-        layout.addWidget(self.main_window.combo_timer_cost_tag)
+        contract_layout.addWidget(QLabel("费用回复 tag"))
+        contract_layout.addWidget(self.main_window.combo_timer_cost_tag)
+        contract_layout.addStretch()
+        layout.addWidget(contract_group)
 
         self.main_window.timer_status = QLabel("状态: 就绪")
         layout.addWidget(self.main_window.timer_status)

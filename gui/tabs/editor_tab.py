@@ -13,6 +13,7 @@ from PyQt6.QtGui import QColor, QBrush
 
 from core.special_behaviors import get_registry, ConfigField
 from core.special_behaviors.probability_checkpoints import get_method_registry
+from gui.tabs._ui_utils import set_group_box_icon
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo, SummonInfo
 
 
@@ -74,13 +75,29 @@ class EditorTab(QWidget):
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
 
         # 顶部横条：关卡信息 + 脚本管理
         top_bar = QHBoxLayout()
-        top_bar.addWidget(QLabel("关卡代号"))
+        top_bar.setSpacing(6)
+
+        stage_group = QGroupBox("关卡代号")
+        set_group_box_icon(stage_group, "code.png")
+        stage_group_layout = QHBoxLayout(stage_group)
+        stage_group_layout.setContentsMargins(6, 6, 6, 6)
+        stage_group_layout.setSpacing(6)
         self.main_window.stage_code_edit = QLineEdit()
-        self.main_window.stage_code_edit.setMaximumWidth(120)
-        top_bar.addWidget(self.main_window.stage_code_edit)
+        self.main_window.stage_code_edit.setMaximumWidth(100)
+        stage_group_layout.addWidget(self.main_window.stage_code_edit)
+
+        self.main_window.btn_new = QPushButton("新建")
+        self.main_window.btn_open = QPushButton("打开")
+        self.main_window.btn_save = QPushButton("保存")
+        stage_group_layout.addWidget(self.main_window.btn_new)
+        stage_group_layout.addWidget(self.main_window.btn_open)
+        stage_group_layout.addWidget(self.main_window.btn_save)
+        top_bar.addWidget(stage_group)
 
         top_bar.addStretch()
 
@@ -88,19 +105,20 @@ class EditorTab(QWidget):
 
         # 下方主区域
         content_layout = QHBoxLayout()
+        content_layout.setSpacing(8)
 
-        # 左侧：干员 / 道具 / 召唤物 / 召唤物绑定（2x2 网格）
+        # 左侧：干员 / 道具 / 召唤物 / 特殊行为（2x2 网格）
         lists_panel = QGridLayout()
-        lists_panel.setSpacing(6)
+        lists_panel.setSpacing(4)
 
         # ---- 部署区干员初始列表 ----
-        op_widget = QWidget()
+        op_widget = QGroupBox("部署区干员初始列表")
+        set_group_box_icon(op_widget, "operator.png")
         op_layout = QVBoxLayout(op_widget)
-        op_layout.setContentsMargins(0, 0, 0, 0)
+        op_layout.setContentsMargins(6, 6, 6, 6)
         op_layout.setSpacing(3)
-        op_layout.addWidget(QLabel("部署区干员初始列表"))
         self.main_window.operators_list = QListWidget()
-        self.main_window.operators_list.setMinimumHeight(100)
+        self.main_window.operators_list.setMinimumHeight(70)
         self.main_window.operators_list.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -124,15 +142,15 @@ class EditorTab(QWidget):
         lists_panel.addWidget(op_widget, 0, 0)
 
         # ---- 部署区道具初始列表 ----
-        item_widget = QWidget()
+        item_widget = QGroupBox("部署区道具初始列表")
+        set_group_box_icon(item_widget, "item.png")
         item_layout = QVBoxLayout(item_widget)
-        item_layout.setContentsMargins(0, 0, 0, 0)
+        item_layout.setContentsMargins(6, 6, 6, 6)
         item_layout.setSpacing(3)
-        item_layout.addWidget(QLabel("部署区道具初始列表"))
         self.main_window.items_table = QTableWidget()
         self.main_window.items_table.setColumnCount(2)
         self.main_window.items_table.setHorizontalHeaderLabels(["道具名", "次数"])
-        self.main_window.items_table.setMinimumHeight(80)
+        self.main_window.items_table.setMinimumHeight(60)
         self.main_window.items_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -147,6 +165,9 @@ class EditorTab(QWidget):
             QAbstractItemView.EditTrigger.SelectedClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
         )
+        self.main_window.items_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
         item_layout.addWidget(self.main_window.items_table)
         item_input_layout = QHBoxLayout()
         self.main_window.item_input = QLineEdit()
@@ -154,8 +175,10 @@ class EditorTab(QWidget):
         self.main_window.item_charges_input = QSpinBox()
         self.main_window.item_charges_input.setRange(1, 999)
         self.main_window.item_charges_input.setValue(1)
-        item_input_layout.addWidget(self.main_window.item_input)
-        item_input_layout.addWidget(self.main_window.item_charges_input)
+        self.main_window.item_input.setMinimumWidth(80)
+        self.main_window.item_charges_input.setFixedWidth(65)
+        item_input_layout.addWidget(self.main_window.item_input, 1)
+        item_input_layout.addWidget(self.main_window.item_charges_input, 0)
         item_layout.addLayout(item_input_layout)
 
         item_btn_layout = QGridLayout()
@@ -171,15 +194,15 @@ class EditorTab(QWidget):
         lists_panel.addWidget(item_widget, 0, 1)
 
         # ---- 特殊召唤物 ----
-        summon_widget = QWidget()
+        summon_widget = QGroupBox("特殊召唤物")
+        set_group_box_icon(summon_widget, "summon.png")
         summon_layout = QVBoxLayout(summon_widget)
-        summon_layout.setContentsMargins(0, 0, 0, 0)
+        summon_layout.setContentsMargins(6, 6, 6, 6)
         summon_layout.setSpacing(3)
-        summon_layout.addWidget(QLabel("特殊召唤物"))
         self.main_window.summons_table = QTableWidget()
         self.main_window.summons_table.setColumnCount(2)
         self.main_window.summons_table.setHorizontalHeaderLabels(["召唤物名", "费用"])
-        self.main_window.summons_table.setMinimumHeight(60)
+        self.main_window.summons_table.setMinimumHeight(50)
         self.main_window.summons_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.main_window.summons_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -199,8 +222,10 @@ class EditorTab(QWidget):
         self.main_window.summon_cost_input = QSpinBox()
         self.main_window.summon_cost_input.setRange(0, 999)
         self.main_window.summon_cost_input.setValue(5)
-        summon_input_layout.addWidget(self.main_window.summon_input)
-        summon_input_layout.addWidget(self.main_window.summon_cost_input)
+        self.main_window.summon_input.setMinimumWidth(80)
+        self.main_window.summon_cost_input.setFixedWidth(65)
+        summon_input_layout.addWidget(self.main_window.summon_input, 1)
+        summon_input_layout.addWidget(self.main_window.summon_cost_input, 0)
         summon_layout.addLayout(summon_input_layout)
 
         summon_btn_layout = QGridLayout()
@@ -216,13 +241,13 @@ class EditorTab(QWidget):
         lists_panel.addWidget(summon_widget, 1, 0)
 
         # ---- 特殊行为 ----
-        special_widget = QWidget()
+        special_widget = QGroupBox("特殊行为")
+        set_group_box_icon(special_widget, "special_behavior.png")
         special_layout = QVBoxLayout(special_widget)
-        special_layout.setContentsMargins(0, 0, 0, 0)
+        special_layout.setContentsMargins(6, 6, 6, 6)
         special_layout.setSpacing(3)
-        special_layout.addWidget(QLabel("特殊行为"))
         self.main_window.special_behaviors_list = QListWidget()
-        self.main_window.special_behaviors_list.setMinimumHeight(60)
+        self.main_window.special_behaviors_list.setMinimumHeight(50)
         self.main_window.special_behaviors_list.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -243,17 +268,23 @@ class EditorTab(QWidget):
 
         lists_widget = QWidget()
         lists_widget.setLayout(lists_panel)
-        lists_widget.setMaximumWidth(520)
+        lists_widget.setMaximumWidth(340)
         content_layout.addWidget(lists_widget, 0)
 
         # 中间：时间轴列表
-        mid_panel = QVBoxLayout()
-        mid_panel.addWidget(QLabel("时间轴操作"))
+        mid_panel_widget = QGroupBox("时间轴操作")
+        set_group_box_icon(mid_panel_widget, "timeline.png")
+        mid_panel = QVBoxLayout(mid_panel_widget)
+        mid_panel.setContentsMargins(6, 6, 6, 6)
+        mid_panel.setSpacing(4)
         self.main_window.action_table = QTableWidget()
         self.main_window.action_table.setColumnCount(7)
         self.main_window.action_table.setHorizontalHeaderLabels(
             ["秒", "帧", "操作", "干员/道具", "格子", "方向", "装置"]
         )
+        header = self.main_window.action_table.horizontalHeader()
+        for col in range(7):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         self.main_window.action_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -265,21 +296,35 @@ class EditorTab(QWidget):
         mid_panel.addWidget(self.main_window.action_table)
 
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
         self.main_window.btn_add = QPushButton("添加")
         self.main_window.btn_remove = QPushButton("删除")
         self.main_window.btn_up = QPushButton("上移")
         self.main_window.btn_down = QPushButton("下移")
+        for btn in (
+            self.main_window.btn_add,
+            self.main_window.btn_remove,
+            self.main_window.btn_up,
+            self.main_window.btn_down,
+        ):
+            btn.setFixedHeight(24)
+            btn.setFixedWidth(80)
+            btn.setStyleSheet("padding: 2px 6px; font-size: 12px;")
         btn_layout.addWidget(self.main_window.btn_add)
         btn_layout.addWidget(self.main_window.btn_remove)
         btn_layout.addWidget(self.main_window.btn_up)
         btn_layout.addWidget(self.main_window.btn_down)
+        btn_layout.addStretch()
         mid_panel.addLayout(btn_layout)
 
-        content_layout.addLayout(mid_panel, 3)
+        content_layout.addWidget(mid_panel_widget, 3)
 
         # 右侧：操作详情
-        right_panel = QVBoxLayout()
-        right_panel.addWidget(QLabel("操作属性"))
+        right_panel_widget = QGroupBox("操作属性")
+        set_group_box_icon(right_panel_widget, "Attribute.png")
+        right_panel = QVBoxLayout(right_panel_widget)
+        right_panel.setContentsMargins(6, 6, 6, 6)
+        right_panel.setSpacing(4)
 
         right_panel.addWidget(QLabel("时间"))
         time_layout = QHBoxLayout()
@@ -387,26 +432,8 @@ class EditorTab(QWidget):
 
         right_panel.addStretch()
 
-        right_top = QWidget()
-        right_top.setLayout(right_panel)
-
-        script_mgmt = QGroupBox("脚本管理")
-        mgmt_layout = QVBoxLayout(script_mgmt)
-        self.main_window.btn_new = QPushButton("新建")
-        self.main_window.btn_open = QPushButton("打开")
-        self.main_window.btn_save = QPushButton("保存")
-        mgmt_layout.addWidget(self.main_window.btn_new)
-        mgmt_layout.addWidget(self.main_window.btn_open)
-        mgmt_layout.addWidget(self.main_window.btn_save)
-
-        right_container = QVBoxLayout()
-        right_container.addWidget(right_top, 1)
-        right_container.addWidget(script_mgmt, 0)
-
-        right_widget = QWidget()
-        right_widget.setLayout(right_container)
-        right_widget.setMaximumWidth(320)
-        content_layout.addWidget(right_widget, 0)
+        right_panel_widget.setMaximumWidth(180)
+        content_layout.addWidget(right_panel_widget, 0)
 
         main_layout.addLayout(content_layout, 1)
 

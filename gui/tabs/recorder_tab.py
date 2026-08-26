@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, QTimer, QMetaObject, Q_ARG, QThread
 
 import action
 from core.base.paths import get_project_root
+from gui.tabs._ui_utils import set_group_box_icon
 from core.capture.capture import WindowCapture
 from core.vision.ocr_engine import OCREngine
 from core.recording.recorder import ActionRecorder
@@ -154,7 +155,10 @@ class RecorderTab(QWidget):
 
         # 参数区域：每行一个 QHBoxLayout，输入框紧跟标签，不居中展开
         param_group = QGroupBox("录制参数")
-        param_layout = QVBoxLayout()
+        set_group_box_icon(param_group, "level_setup.png")
+        param_layout = QVBoxLayout(param_group)
+        param_layout.setContentsMargins(6, 6, 6, 6)
+        param_layout.setSpacing(6)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("关卡代号:"))
@@ -283,11 +287,13 @@ class RecorderTab(QWidget):
 
         # 干员列表 + 道具列表并排
         op_group = QGroupBox("干员列表")
+        set_group_box_icon(op_group, "operator.png")
         op_layout = QVBoxLayout(op_group)
+        op_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.rec_op_table = QTableWidget()
         self.main_window.rec_op_table.setColumnCount(2)
         self.main_window.rec_op_table.setHorizontalHeaderLabels(["干员名", "费用"])
-        self.main_window.rec_op_table.setMinimumHeight(100)
+        self.main_window.rec_op_table.setMinimumHeight(270)
         self.main_window.rec_op_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -298,59 +304,86 @@ class RecorderTab(QWidget):
         )
         op_layout.addWidget(self.main_window.rec_op_table)
         op_input_layout = QHBoxLayout()
+        op_input_layout = QHBoxLayout()
+        op_input_layout.setSpacing(4)
         self.main_window.rec_op_input = QLineEdit()
         self.main_window.rec_op_input.setPlaceholderText("输入干员名...")
+        self.main_window.rec_op_input.setMinimumWidth(100)
         self.main_window.rec_op_cost_input = QSpinBox()
         self.main_window.rec_op_cost_input.setRange(0, 999)
         self.main_window.rec_op_cost_input.setValue(0)
         self.main_window.rec_op_cost_input.setSpecialValueText("未设置")
+        self.main_window.rec_op_cost_input.setFixedWidth(95)
         self.main_window.rec_op_add_btn = QPushButton("添加")
         self.main_window.rec_op_remove_btn = QPushButton("删除")
         self.main_window.rec_op_up_btn = QPushButton("上移")
         self.main_window.rec_op_down_btn = QPushButton("下移")
-        op_input_layout.addWidget(self.main_window.rec_op_input)
-        op_input_layout.addWidget(self.main_window.rec_op_cost_input)
-        op_input_layout.addWidget(self.main_window.rec_op_add_btn)
-        op_input_layout.addWidget(self.main_window.rec_op_remove_btn)
-        op_input_layout.addWidget(self.main_window.rec_op_up_btn)
-        op_input_layout.addWidget(self.main_window.rec_op_down_btn)
+        for btn in (
+            self.main_window.rec_op_add_btn,
+            self.main_window.rec_op_remove_btn,
+            self.main_window.rec_op_up_btn,
+            self.main_window.rec_op_down_btn,
+        ):
+            btn.setFixedHeight(22)
+            btn.setFixedWidth(45)
+            btn.setStyleSheet("padding: 1px 4px; font-size: 11px;")
+        op_input_layout.addWidget(self.main_window.rec_op_input, 1)
+        op_input_layout.addWidget(self.main_window.rec_op_cost_input, 0)
+        op_input_layout.addWidget(self.main_window.rec_op_add_btn, 0)
+        op_input_layout.addWidget(self.main_window.rec_op_remove_btn, 0)
+        op_input_layout.addWidget(self.main_window.rec_op_up_btn, 0)
+        op_input_layout.addWidget(self.main_window.rec_op_down_btn, 0)
         op_layout.addLayout(op_input_layout)
 
         item_group = QGroupBox("道具列表")
+        set_group_box_icon(item_group, "item.png")
         item_layout = QVBoxLayout(item_group)
+        item_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.rec_item_table = QTableWidget()
         self.main_window.rec_item_table.setColumnCount(2)
         self.main_window.rec_item_table.setHorizontalHeaderLabels(["道具名", "次数"])
-        self.main_window.rec_item_table.setMinimumHeight(100)
+        self.main_window.rec_item_table.setMinimumHeight(270)
         self.main_window.rec_item_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         item_layout.addWidget(self.main_window.rec_item_table)
         item_input_layout = QHBoxLayout()
+        item_input_layout.setSpacing(4)
         self.main_window.rec_item_input = QLineEdit()
         self.main_window.rec_item_input.setPlaceholderText("道具名...")
+        self.main_window.rec_item_input.setMinimumWidth(100)
         self.main_window.rec_item_charges_input = QSpinBox()
         self.main_window.rec_item_charges_input.setRange(1, 999)
         self.main_window.rec_item_charges_input.setValue(1)
+        self.main_window.rec_item_charges_input.setFixedWidth(95)
         self.main_window.rec_item_add_btn = QPushButton("添加")
         self.main_window.rec_item_remove_btn = QPushButton("删除")
         self.main_window.rec_item_up_btn = QPushButton("上移")
         self.main_window.rec_item_down_btn = QPushButton("下移")
-        item_input_layout.addWidget(self.main_window.rec_item_input)
-        item_input_layout.addWidget(self.main_window.rec_item_charges_input)
-        item_input_layout.addWidget(self.main_window.rec_item_add_btn)
-        item_input_layout.addWidget(self.main_window.rec_item_remove_btn)
-        item_input_layout.addWidget(self.main_window.rec_item_up_btn)
-        item_input_layout.addWidget(self.main_window.rec_item_down_btn)
+        for btn in (
+            self.main_window.rec_item_add_btn,
+            self.main_window.rec_item_remove_btn,
+            self.main_window.rec_item_up_btn,
+            self.main_window.rec_item_down_btn,
+        ):
+            btn.setFixedHeight(22)
+            btn.setFixedWidth(45)
+            btn.setStyleSheet("padding: 1px 4px; font-size: 11px;")
+        item_input_layout.addWidget(self.main_window.rec_item_input, 1)
+        item_input_layout.addWidget(self.main_window.rec_item_charges_input, 0)
+        item_input_layout.addWidget(self.main_window.rec_item_add_btn, 0)
+        item_input_layout.addWidget(self.main_window.rec_item_remove_btn, 0)
+        item_input_layout.addWidget(self.main_window.rec_item_up_btn, 0)
+        item_input_layout.addWidget(self.main_window.rec_item_down_btn, 0)
         item_layout.addLayout(item_input_layout)
 
+        layout.addWidget(param_group)
+
+        # 干员列表 + 道具列表并排
         list_layout = QHBoxLayout()
         list_layout.addWidget(op_group, 1)
         list_layout.addWidget(item_group, 1)
-        param_layout.addLayout(list_layout)
-
-        param_group.setLayout(param_layout)
-        layout.addWidget(param_group)
+        layout.addLayout(list_layout)
 
         # 绑定录制器列表按钮
         self.main_window.rec_op_add_btn.clicked.connect(self._rec_add_operator)
@@ -378,23 +411,6 @@ class RecorderTab(QWidget):
         self.main_window.rec_takeover_hotkey.textChanged.connect(self.main_window._save_config)
         self.main_window.rec_chk_probability_retry.stateChanged.connect(self.main_window._save_config)
         self.main_window.rec_loaded_script_path.textChanged.connect(self._update_loaded_script_status)
-
-        # 使用说明
-        guide_label = QLabel()
-        guide_label.setWordWrap(True)
-        guide_label.setTextFormat(Qt.TextFormat.RichText)
-        guide_label.setText(
-            "<h3>使用说明</h3>"
-            "<ul>"
-            "<li>首次OCR加载较慢，请赖心等待</li>"
-            "<li>在编队界面点击开始录制，显示'加载完毕，请进入作战...'即可进入作战。初次点击后不需要再点击悬浮窗开始录制</li>"
-            "<li>干员被击退前请主动撤退，否则也会错位。</li>"
-            "<li>F10为快捷键停止录制；装载脚本时默认按F9可手动接管（可在“接管快捷键”中修改）。在完成按下悬浮窗'结束录制'完成一次录制后，在编队界面再次点击开始录制即可继续下一次录制。</li>"
-            "<li>装载脚本后，在编队界面不需要操作，会自动执行脚本，脚本结束后会自动暂停，继续游戏会自动继续录制操作，也可以中途手动接管。</li>"
-            "<li>录制结束后会自动离线识别并生成脚本，若出现 __unknown__ / __item__ 可以手动修正，这是因为该单位未被部署，不修正不会影响脚本正常执行。</li>"
-            "</ul>"
-        )
-        layout.addWidget(guide_label)
 
         # 控制按钮
         btn_layout = QHBoxLayout()

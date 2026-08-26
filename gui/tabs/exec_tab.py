@@ -3,8 +3,9 @@ import os
 import sys
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
     QGroupBox, QCheckBox, QComboBox, QSpinBox, QTextEdit, QMessageBox, QFileDialog,
+    QDialog, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from PyQt6.QtGui import QColor, QImage, QPalette, QPainter, QPixmap
@@ -14,7 +15,10 @@ import cv2
 import numpy as np
 
 from core.base.paths import gui_template
+from gui.tabs._ui_utils import scaled_icon_path, set_group_box_icon
 from models.script_schema import ScriptModel
+
+
 def _prepare_bg_pixmap(pixmap: QPixmap, opacity: float = 0.35) -> QPixmap:
     """对背景图降低不透明度，产生透明感，保留透明通道。"""
     if pixmap.isNull():
@@ -31,6 +35,56 @@ def _prepare_bg_pixmap(pixmap: QPixmap, opacity: float = 0.35) -> QPixmap:
 
     q_image = QImage(arr.data, width, height, width * 4, QImage.Format.Format_ARGB32)
     return QPixmap.fromImage(q_image.copy())
+
+
+class SupportConfigDialog(QDialog):
+    """脚本执行页助战参数配置对话框。"""
+
+    def __init__(self, parent=None, friend_index=0, skill=1, module=1):
+        super().__init__(parent)
+        self.setWindowTitle("助战配置")
+        self.setMinimumWidth(280)
+        self._friend_index = friend_index
+        self._skill = skill
+        self._module = module
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        form_layout = QGridLayout()
+        form_layout.addWidget(QLabel("好友位置"), 0, 0)
+        self.spin_friend = QSpinBox()
+        self.spin_friend.setRange(0, 8)
+        self.spin_friend.setValue(self._friend_index)
+        form_layout.addWidget(self.spin_friend, 0, 1)
+
+        form_layout.addWidget(QLabel("携带技能"), 1, 0)
+        self.combo_skill = QComboBox()
+        self.combo_skill.addItems(["1", "2", "3"])
+        self.combo_skill.setCurrentIndex(max(0, self._skill - 1))
+        form_layout.addWidget(self.combo_skill, 1, 1)
+
+        form_layout.addWidget(QLabel("模组选择"), 2, 0)
+        self.combo_module = QComboBox()
+        self.combo_module.addItems(["1", "2", "3"])
+        self.combo_module.setCurrentIndex(max(0, self._module - 1))
+        form_layout.addWidget(self.combo_module, 2, 1)
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_config(self) -> dict:
+        return {
+            "friend_index": self.spin_friend.value(),
+            "skill": int(self.combo_skill.currentText()),
+            "module": int(self.combo_module.currentText()),
+        }
 
 
 class ContractLogContainer(QWidget):
@@ -86,26 +140,35 @@ class ExecTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
+        main_layout.setSpacing(12)
+
+        # 左侧面板：配置区
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
 
         # 脚本选择
-        script_layout = QHBoxLayout()
-        script_layout.addWidget(QLabel("脚本文件"))
+        script_group = QGroupBox("脚本选择")
+        set_group_box_icon(script_group, "choose.png")
+        script_layout = QHBoxLayout(script_group)
         self.main_window.exec_script_path = QLineEdit()
         self.main_window.exec_script_path.setPlaceholderText("选择脚本 JSON 文件...")
         script_layout.addWidget(self.main_window.exec_script_path)
         self.main_window.btn_browse = QPushButton("浏览")
         self.main_window.btn_browse.clicked.connect(self._browse_script)
         script_layout.addWidget(self.main_window.btn_browse)
-        layout.addLayout(script_layout)
+        left_layout.addWidget(script_group)
 
         # 参数勾选
         params_group = QGroupBox("运行参数")
-        params_layout = QHBoxLayout(params_group)
-        self.main_window.chk_loop = QCheckBox("无限凸图 (--loop)")
-        self.main_window.chk_leak = QCheckBox("漏怪检测 (--leak)")
-        self.main_window.chk_debug = QCheckBox("Debug (--debug)")
-        self.main_window.chk_direct_start = QCheckBox("直接开始作战 (--direct-start)")
+        set_group_box_icon(params_group, "level_setup.png")
+        params_layout = QGridLayout(params_group)
+        self.main_window.chk_loop = QCheckBox("无限凸图")
+        self.main_window.chk_leak = QCheckBox("漏怪检测")
+        self.main_window.chk_debug = QCheckBox("Debug")
+        self.main_window.chk_direct_start = QCheckBox("直接开始作战")
         self.main_window.chk_challenge_mode = QCheckBox("突袭模式")
         self.main_window.chk_sand_table = QCheckBox("沙盘推演")
         self.main_window.chk_speed2x = QCheckBox("二倍速凸图")
@@ -113,84 +176,94 @@ class ExecTab(QWidget):
         self.main_window.chk_direct_start.stateChanged.connect(self._on_direct_start_changed)
         self.main_window.chk_challenge_mode.stateChanged.connect(self._on_challenge_mode_changed)
         self.main_window.chk_sand_table.stateChanged.connect(self._on_sand_table_changed)
+        params_layout.addWidget(self.main_window.chk_loop, 0, 0)
+        params_layout.addWidget(self.main_window.chk_leak, 0, 1)
+        params_layout.addWidget(self.main_window.chk_direct_start, 0, 2)
+        params_layout.addWidget(self.main_window.chk_challenge_mode, 1, 0)
+        params_layout.addWidget(self.main_window.chk_sand_table, 1, 1)
+        params_layout.addWidget(self.main_window.chk_speed2x, 1, 2)
+        left_layout.addWidget(params_group)
+
+        # Debug
+        debug_group = QGroupBox("Debug")
+        set_group_box_icon(debug_group, "debug.png")
+        debug_layout = QHBoxLayout(debug_group)
         self.main_window.chk_debug.stateChanged.connect(self.main_window._save_config)
-        params_layout.addWidget(self.main_window.chk_loop)
-        params_layout.addWidget(self.main_window.chk_leak)
-        params_layout.addWidget(self.main_window.chk_debug)
-        params_layout.addWidget(self.main_window.chk_direct_start)
-        params_layout.addWidget(self.main_window.chk_challenge_mode)
-        params_layout.addWidget(self.main_window.chk_sand_table)
-        params_layout.addWidget(self.main_window.chk_speed2x)
-        params_layout.addStretch()
-        layout.addWidget(params_group)
+        debug_layout.addWidget(QLabel("Debug输出"))
+        debug_layout.addWidget(self.main_window.chk_debug)
+        debug_layout.addStretch()
+        left_layout.addWidget(debug_group)
 
         # 助战参数
         support_group = QGroupBox("助战参数")
-        support_layout = QHBoxLayout(support_group)
+        set_group_box_icon(support_group, "support_operator.png")
+        support_layout = QGridLayout(support_group)
         self.main_window.chk_borrow_support = QCheckBox("借用干员")
         self.main_window.chk_borrow_support.stateChanged.connect(self._on_borrow_support_changed)
-        support_layout.addWidget(self.main_window.chk_borrow_support)
+        support_layout.addWidget(QLabel("借用干员"), 0, 0)
+        support_layout.addWidget(self.main_window.chk_borrow_support, 0, 1)
 
-        support_layout.addWidget(QLabel("好友位置"))
+        self.main_window.btn_support_config = QPushButton("配置")
+        self.main_window.btn_support_config.setEnabled(False)
+        self.main_window.btn_support_config.setFixedWidth(60)
+        self.main_window.btn_support_config.clicked.connect(self._on_support_config_clicked)
+        support_layout.addWidget(QLabel("助战配置"), 0, 2)
+        support_layout.addWidget(self.main_window.btn_support_config, 0, 3)
+        support_layout.setColumnStretch(4, 1)
+
+        # 助战配置值保存在隐藏的输入控件中，便于主窗口统一读写配置
         self.main_window.spin_support_friend = QSpinBox()
         self.main_window.spin_support_friend.setRange(0, 8)
-        self.main_window.spin_support_friend.setEnabled(False)
-        support_layout.addWidget(self.main_window.spin_support_friend)
+        self.main_window.spin_support_friend.setVisible(False)
 
-        support_layout.addWidget(QLabel("携带技能"))
         self.main_window.combo_support_skill = QComboBox()
         self.main_window.combo_support_skill.addItems(["1", "2", "3"])
-        self.main_window.combo_support_skill.setEnabled(False)
-        support_layout.addWidget(self.main_window.combo_support_skill)
+        self.main_window.combo_support_skill.setVisible(False)
 
-        support_layout.addWidget(QLabel("模组选择"))
         self.main_window.combo_support_module = QComboBox()
         self.main_window.combo_support_module.addItems(["1", "2", "3"])
-        self.main_window.combo_support_module.setEnabled(False)
-        support_layout.addWidget(self.main_window.combo_support_module)
+        self.main_window.combo_support_module.setVisible(False)
 
-        support_layout.addStretch()
-        layout.addWidget(support_group)
+        left_layout.addWidget(support_group)
 
         # 键位设置
         keys_group = QGroupBox("键位设置")
-        keys_layout = QHBoxLayout(keys_group)
-
-        keys_layout.addWidget(QLabel("暂停键"))
+        set_group_box_icon(keys_group, "keyboard.png")
+        keys_layout = QGridLayout(keys_group)
         self.main_window.combo_pause_key = QComboBox()
         self.main_window.combo_pause_key.setEditable(True)
         self.main_window.combo_pause_key.addItems(["space", "p", "q", "e", "r", "f"])
         self.main_window.combo_pause_key.setFixedWidth(80)
-        keys_layout.addWidget(self.main_window.combo_pause_key)
+        keys_layout.addWidget(QLabel("暂停键"), 0, 0)
+        keys_layout.addWidget(self.main_window.combo_pause_key, 0, 1)
 
-        keys_layout.addWidget(QLabel("技能键"))
         self.main_window.line_skill_key = QLineEdit("e")
         self.main_window.line_skill_key.setMaxLength(8)
         self.main_window.line_skill_key.setFixedWidth(60)
-        keys_layout.addWidget(self.main_window.line_skill_key)
+        keys_layout.addWidget(QLabel("技能键"), 0, 2)
+        keys_layout.addWidget(self.main_window.line_skill_key, 0, 3)
 
-        keys_layout.addWidget(QLabel("撤退键"))
         self.main_window.line_retreat_key = QLineEdit("q")
         self.main_window.line_retreat_key.setMaxLength(8)
         self.main_window.line_retreat_key.setFixedWidth(60)
-        keys_layout.addWidget(self.main_window.line_retreat_key)
+        keys_layout.addWidget(QLabel("撤退键"), 1, 0)
+        keys_layout.addWidget(self.main_window.line_retreat_key, 1, 1)
 
-        keys_layout.addWidget(QLabel("倍速键"))
         self.main_window.line_speed_key = QLineEdit("f")
         self.main_window.line_speed_key.setMaxLength(8)
         self.main_window.line_speed_key.setFixedWidth(60)
-        keys_layout.addWidget(self.main_window.line_speed_key)
+        keys_layout.addWidget(QLabel("倍速键"), 1, 2)
+        keys_layout.addWidget(self.main_window.line_speed_key, 1, 3)
 
         self.main_window.combo_pause_key.currentTextChanged.connect(self._on_game_key_changed)
         self.main_window.line_skill_key.textChanged.connect(self._on_game_key_changed)
         self.main_window.line_retreat_key.textChanged.connect(self._on_game_key_changed)
         self.main_window.line_speed_key.textChanged.connect(self._on_game_key_changed)
-
-        keys_layout.addStretch()
-        layout.addWidget(keys_group)
+        left_layout.addWidget(keys_group)
 
         # 合约选项
         contract_group = QGroupBox("合约选项")
+        set_group_box_icon(contract_group, "warning.png")
         contract_layout = QHBoxLayout(contract_group)
         contract_layout.addWidget(QLabel("费用回复 tag"))
         self.main_window.combo_cost_tag = QComboBox()
@@ -200,11 +273,13 @@ class ExecTab(QWidget):
         self.main_window.combo_cost_tag.addItem("费用回复降低75%", "cc_75")
         self.main_window.combo_cost_tag.addItem("费用不自然回复", "no_regen")
         contract_layout.addWidget(self.main_window.combo_cost_tag)
-
         contract_layout.addStretch()
-        layout.addWidget(contract_group)
+        left_layout.addWidget(contract_group)
 
-        # 按钮
+        # 按钮 + 状态
+        run_group = QGroupBox("执行控制")
+        set_group_box_icon(run_group, "battle.png")
+        run_layout = QVBoxLayout(run_group)
         btn_layout = QHBoxLayout()
         self.main_window.btn_run = QPushButton("运行脚本")
         self.main_window.btn_run.setStyleSheet("background-color: #4CAF50; color: white;")
@@ -213,17 +288,38 @@ class ExecTab(QWidget):
         btn_layout.addWidget(self.main_window.btn_run)
         btn_layout.addWidget(self.main_window.btn_stop)
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        run_layout.addLayout(btn_layout)
 
-        # 状态
         self.main_window.status_label = QLabel("状态: 就绪")
-        layout.addWidget(self.main_window.status_label)
+        run_layout.addWidget(self.main_window.status_label)
+        left_layout.addWidget(run_group)
 
-        # 日志
+        left_layout.addStretch()
+        main_layout.addWidget(left_widget, 1)
+
+        # 右侧面板：日志区
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        log_title_layout = QHBoxLayout()
+        log_title_layout.setSpacing(4)
+        log_icon = QLabel()
+        log_icon.setPixmap(
+            QPixmap(scaled_icon_path("log.png", 20)).scaled(
+                20, 20,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        log_title_layout.addWidget(log_icon)
+        log_title_layout.addWidget(QLabel("执行日志"))
+        log_title_layout.addStretch()
+        right_layout.addLayout(log_title_layout)
         contract_path = str(gui_template("Contract.png"))
         self._log_container = ContractLogContainer(contract_path, self)
         self.main_window.log_text = self._log_container.text_edit
-        layout.addWidget(self._log_container)
+        right_layout.addWidget(self._log_container)
+        main_layout.addLayout(right_layout, 2)
 
         # 背景图容器（暂时注释）
         # self.main_window.log_text = QTextEdit()
@@ -249,79 +345,8 @@ class ExecTab(QWidget):
         self.main_window.process = None
 
     def _on_cost_tag_changed(self):
-        """选择危机合约 tag 时通过 QPalette 切换暗红色主题，未选择时恢复默认。"""
-        cost_tag = self.main_window.combo_cost_tag.currentData()
-        if cost_tag:
-            palette = QPalette(self.style().standardPalette())
-            dark_red = QColor("#6b0000")
-            dark_log_bg = QColor("#3b0000")
-            light_red = QColor("#fff0f0")
-            text_light = QColor("#f0f0f0")
-            text_dark = QColor("#1a1a1a")
-            palette.setColor(QPalette.ColorRole.Window, dark_red)
-            palette.setColor(QPalette.ColorRole.Base, light_red)
-            palette.setColor(QPalette.ColorRole.AlternateBase, dark_red)
-            palette.setColor(QPalette.ColorRole.Text, text_dark)
-            palette.setColor(QPalette.ColorRole.Button, dark_red)
-            palette.setColor(QPalette.ColorRole.ButtonText, text_light)
-            palette.setColor(QPalette.ColorRole.WindowText, text_light)
-            self.setAutoFillBackground(True)
-            self.setPalette(palette)
-            for child in self.findChildren(QWidget):
-                child.setPalette(palette)
-            # 勾选框使用浅红底、白字
-            checkbox_palette = QPalette(palette)
-            checkbox_palette.setColor(QPalette.ColorRole.Window, light_red)
-            checkbox_palette.setColor(QPalette.ColorRole.Button, light_red)
-            checkbox_palette.setColor(QPalette.ColorRole.Base, light_red)
-            checkbox_palette.setColor(QPalette.ColorRole.WindowText, text_light)
-            checkbox_palette.setColor(QPalette.ColorRole.ButtonText, text_light)
-            checkbox_palette.setColor(QPalette.ColorRole.Text, text_light)
-            # 下拉框/数字框使用浅红底、深色字（与输入框保持一致）
-            inputlike_palette = QPalette(palette)
-            inputlike_palette.setColor(QPalette.ColorRole.Window, light_red)
-            inputlike_palette.setColor(QPalette.ColorRole.Button, light_red)
-            inputlike_palette.setColor(QPalette.ColorRole.Base, light_red)
-            inputlike_palette.setColor(QPalette.ColorRole.WindowText, text_dark)
-            inputlike_palette.setColor(QPalette.ColorRole.ButtonText, text_dark)
-            inputlike_palette.setColor(QPalette.ColorRole.Text, text_dark)
-            checkbox_indicator_style = (
-                "QCheckBox { color: #f0f0f0; }"
-                "QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #1a1a1a; border-radius: 3px; background-color: #fff0f0; }"
-                "QCheckBox::indicator:checked { background-color: #4CAF50; border: 1px solid #1a1a1a; border-radius: 3px; }"
-            )
-            for checkbox in self.findChildren(QCheckBox):
-                checkbox.setStyleSheet(checkbox_indicator_style)
-                checkbox.setPalette(checkbox_palette)
-            for combobox in self.findChildren(QComboBox):
-                combobox.setPalette(inputlike_palette)
-            for spinbox in self.findChildren(QSpinBox):
-                spinbox.setPalette(inputlike_palette)
-            self.main_window.log_text.setStyleSheet(
-                f"background-color: transparent; color: {text_dark.name()}; font-family: Consolas, monospace;"
-            )
-            self._log_container.set_contract_mode(True)
-            # self.main_window.log_text.setStyleSheet(
-            #     f"background-color: {dark_log_bg.name()}; color: {text_light.name()}; font-family: Consolas, monospace;"
-            # )
-        else:
-            self.setAutoFillBackground(False)
-            standard = self.style().standardPalette()
-            self.setPalette(standard)
-            for checkbox in self.findChildren(QCheckBox):
-                checkbox.setStyleSheet(self._checkbox_default_checked_style)
-                checkbox.style().unpolish(checkbox)
-                checkbox.style().polish(checkbox)
-                checkbox.update()
-            for child in self.findChildren(QWidget):
-                child.setPalette(QPalette())
-            self.style().unpolish(self)
-            self.style().polish(self)
-            self.repaint()
-            self.main_window.log_text.setStyleSheet(
-                "background-color: transparent; color: #d4d4d4; font-family: Consolas, monospace;"
-            )
-            self._log_container.set_contract_mode(False)
+        """费用回复 tag 切换（保留接口，当前不应用主题变色）。"""
+        pass
 
     def _browse_script(self):
         path, _ = QFileDialog.getOpenFileName(self.main_window, "选择脚本", "", "JSON (*.json)")
@@ -335,9 +360,24 @@ class ExecTab(QWidget):
             enabled = state == Qt.CheckState.Checked.value
         if self.main_window.chk_direct_start.isChecked():
             enabled = False
+        self.main_window.btn_support_config.setEnabled(enabled)
         self.main_window.spin_support_friend.setEnabled(enabled)
         self.main_window.combo_support_skill.setEnabled(enabled)
         self.main_window.combo_support_module.setEnabled(enabled)
+
+    def _on_support_config_clicked(self):
+        dialog = SupportConfigDialog(
+            self.main_window,
+            friend_index=self.main_window.spin_support_friend.value(),
+            skill=int(self.main_window.combo_support_skill.currentText()),
+            module=int(self.main_window.combo_support_module.currentText()),
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            cfg = dialog.get_config()
+            self.main_window.spin_support_friend.setValue(cfg["friend_index"])
+            self.main_window.combo_support_skill.setCurrentIndex(cfg["skill"] - 1)
+            self.main_window.combo_support_module.setCurrentIndex(cfg["module"] - 1)
+            self.main_window._save_config()
 
     def _on_loop_changed(self, state):
         if isinstance(state, Qt.CheckState):
