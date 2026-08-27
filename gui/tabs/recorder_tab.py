@@ -269,7 +269,7 @@ class RecorderTab(QWidget):
         param_layout.addLayout(row)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("debug选项:"))
+        row.addWidget(QLabel("Debug选项:"))
         self.main_window.combo_rec_debug = CheckedComboBox("未选择")
         self.main_window.combo_rec_debug.add_item("录制器状态机", "recorder")
         self.main_window.combo_rec_debug.add_item("费用条检测", "cost_bar")
@@ -462,12 +462,17 @@ class RecorderTab(QWidget):
 
     def _update_loaded_script_status(self):
         path = self.main_window.rec_loaded_script_path.text().strip()
-        if path:
+        has_script = bool(path)
+        if has_script:
             self.main_window.rec_loaded_script_status.setText(
                 f"已装载 {Path(path).name}"
             )
         else:
             self.main_window.rec_loaded_script_status.setText("当前未装载脚本")
+        # 没有装载脚本时禁用概率点配置
+        self.main_window.rec_chk_probability_retry.setEnabled(has_script)
+        if not has_script:
+            self.main_window.rec_chk_probability_retry.setChecked(False)
         overlay = getattr(self.main_window, "_recorder_overlay", None)
         if overlay is not None:
             overlay.set_script_status(

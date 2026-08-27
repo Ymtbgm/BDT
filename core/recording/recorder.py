@@ -349,6 +349,13 @@ class ActionRecorder:
         # 根据 side view 摄像机参数计算技能/撤退按钮中心，并回退到默认值
         self._retreat_x, self._retreat_y = self._compute_retreat_roi()
         self._skill_x, self._skill_y = self._compute_skill_roi()
+        self._log(
+            f"[状态机初始化] 撤退ROI=({self._retreat_x},{self._retreat_y},"
+            f"{self._RETREAT_W},{self._RETREAT_H}) "
+            f"技能ROI=({self._skill_x},{self._skill_y},"
+            f"{self._SKILL_W},{self._SKILL_H}) "
+            f"scale=({self._scale_x:.3f},{self._scale_y:.3f})"
+        )
 
         # 录制状态
         self._recording = False
@@ -587,9 +594,10 @@ class ActionRecorder:
             return
         line = f"[录制器] {message}"
         print(line)
-        if self._debug_log_path is not None:
+        debug_log_path = getattr(self, "_debug_log_path", None)
+        if debug_log_path is not None:
             try:
-                with self._debug_log_path.open("a", encoding="utf-8") as f:
+                with debug_log_path.open("a", encoding="utf-8") as f:
                     f.write(line + "\n")
             except Exception:
                 pass
@@ -1211,16 +1219,22 @@ class ActionRecorder:
         """根据 side view 摄像机参数计算撤退按钮 ROI 左上角坐标，失败则回退默认值。"""
         try:
             sx, sy = self._project_anchor_to_screen(self.tile_calc, *self._RETREAT_ANCHOR)
-            return int(round(sx - self._RETREAT_W / 2)), int(round(sy - self._RETREAT_H / 2))
-        except Exception:
+            x, y = int(round(sx - self._RETREAT_W / 2)), int(round(sy - self._RETREAT_H / 2))
+            self._log(f"[ROI] 撤退按钮投影成功: center=({sx:.1f},{sy:.1f}) roi=({x},{y})")
+            return x, y
+        except Exception as e:
+            self._log(f"[ROI] 撤退按钮投影失败，使用默认值 1145,510: {e}")
             return 1145, 510
 
     def _compute_skill_roi(self) -> Tuple[int, int]:
         """根据 side view 摄像机参数计算技能按钮 ROI 左上角坐标，失败则回退默认值。"""
         try:
             sx, sy = self._project_anchor_to_screen(self.tile_calc, *self._SKILL_ANCHOR)
-            return int(round(sx - self._SKILL_W / 2)), int(round(sy - self._SKILL_H / 2))
-        except Exception:
+            x, y = int(round(sx - self._SKILL_W / 2)), int(round(sy - self._SKILL_H / 2))
+            self._log(f"[ROI] 技能按钮投影成功: center=({sx:.1f},{sy:.1f}) roi=({x},{y})")
+            return x, y
+        except Exception as e:
+            self._log(f"[ROI] 技能按钮投影失败，使用默认值 1615,885: {e}")
             return 1615, 885
 
     def _in_fixed_roi(self, win_x: int, win_y: int, base_x: int, base_y: int,
@@ -1750,9 +1764,10 @@ class ActionRecorder:
         with self._lock:
             self._raw_actions.append(action_obj)
             self._active_grids.add(grid)
+            action_idx = len(self._raw_actions)
         self._save_debug_screenshot("deploy", time_ms)
         self._log(
-            f"RAW DEPLOY click_ratio={click_ratio_from_right:.4f} -> {grid} "
+            f"[RAW] #{action_idx} DEPLOY click_ratio={click_ratio_from_right:.4f} -> {grid} "
             f"dir={direction} time_ms={time_ms} keyframes={keyframe_ids}"
         )
 
@@ -1767,8 +1782,9 @@ class ActionRecorder:
         with self._lock:
             self._raw_actions.append(action_obj)
             self._active_grids.discard(grid)
+            action_idx = len(self._raw_actions)
         self._save_debug_screenshot("retreat", time_ms)
-        self._log(f"RAW RETREAT {grid} time_ms={time_ms}")
+        self._log(f"[RAW] #{action_idx} RETREAT {grid} time_ms={time_ms}")
 
     def _record_raw_skill(self, grid: Tuple[int, int], time_ms: int):
         action_obj = RawAction(
@@ -1779,8 +1795,12 @@ class ActionRecorder:
         )
         with self._lock:
             self._raw_actions.append(action_obj)
+            action_idx = len(self._raw_actions)
         self._save_debug_screenshot("skill", time_ms)
-        self._log(f"RAW SKILL {grid} time_ms={time_ms}")
+        self._log(
+            f"[RAW] #{action_idx} SKILL grid={grid} time_ms={time_ms} "
+            f"target_ref={action_obj.target_ref}"
+        )
 
     # ------------------------------------------------------------------
     # 输入回调
@@ -1968,10 +1988,13 @@ class ActionRecorder:
                                       self._skill_x, self._skill_y,
                                       self._SKILL_W, self._SKILL_H)
                 self._log(
-                    f" UNIT_SELECTED mouseUp in_retreat={in_retreat} in_skill={in_skill} "
-                    f"pos=({win_x:.0f},{win_y:.0f})"
+                    f"[状态机] UNIT_SELECTED mouseUp pos=({win_x:.0f},{win_y:.0f}) "
+                    f"selected={self._selected_unit_grid} "
+                    f"in_retreat={in_retreat} in_skill={in_skill} "
+                    f"retreat_roi=({self._retreat_x},{self._retreat_y},{self._RETREAT_W},{self._RETREAT_H}) "
+                    f"skill_roi=({self._skill_x},{self._skill_y},{self._SKILL_W},{self._SKILL_H})"
                 )
-                self._log_pending_skill("UNIT_SELECTED入口")
+                self._log_pending_skill("[状态机] UNIT_SELECTED入口")
                 if in_retreat:
                     # 撤退优先，清空可能存在的技能预输入
                     self._log(" 命中撤退ROI，清空技能预输入并记录RETREAT")
@@ -1985,15 +2008,19 @@ class ActionRecorder:
                     # 已有技能预输入时，若落点命中另一名已部署干员，视为 normal 视角下误选新干员，
                     # 用最后一次有效技能时间落盘并切换选中；否则继续累积技能预输入时间。
                     hit_grid = self._field_unit_hit(win_x, win_y)
-                    self._log(f" 技能ROI内 hit_grid={hit_grid} selected={self._selected_unit_grid}")
+                    self._log(
+                        f"[状态机] 技能ROI内点击 hit_grid={hit_grid} "
+                        f"selected={self._selected_unit_grid}"
+                    )
                     if (
                         self._pending_skill_grid is not None
                         and hit_grid is not None
                         and hit_grid != self._selected_unit_grid
                     ):
                         self._log(
-                            f" 技能ROI内命中其他干员 {hit_grid}，"
-                            f"使用最后一次有效技能时间 {self._pending_skill_last_ms}ms"
+                            f"[状态机] 技能ROI内命中其他干员 {hit_grid}，"
+                            f"落盘 SKILL {self._pending_skill_grid} @ {self._pending_skill_last_ms}ms，"
+                            f"然后切换选中到 {hit_grid}"
                         )
                         self._record_raw_skill(self._pending_skill_grid, self._pending_skill_last_ms)
                         self._pending_skill_grid = None
@@ -2002,38 +2029,54 @@ class ActionRecorder:
                         with self._lock:
                             self._state = "UNIT_SELECTED"
                             self._selected_unit_grid = hit_grid
-                        self._log(f"选中单位 @ {hit_grid} (技能ROI内命中)")
+                        self._log(f"[状态机] 选中单位 @ {hit_grid} (技能ROI内命中其他干员)")
                         return
                     now_ms = int(self._now_ms())
+                    old_pending = self._pending_skill_grid
                     if self._pending_skill_grid is None:
                         self._pending_skill_grid = self._selected_unit_grid
                         self._pending_skill_first_ms = now_ms
                     self._pending_skill_last_ms = now_ms
-                    self._log(f" 技能ROI内点击，更新预输入时间 {now_ms}ms")
-                    self._log_pending_skill("技能ROI点击后")
+                    if old_pending is None:
+                        self._log(
+                            f"[状态机] 技能ROI内首次点击，开启 pending_skill "
+                            f"grid={self._selected_unit_grid} time_ms={now_ms}ms"
+                        )
+                    else:
+                        self._log(
+                            f"[状态机] 技能ROI内再次点击，更新预输入时间 "
+                            f"time_ms={now_ms}ms"
+                        )
+                    self._log_pending_skill("[状态机] 技能ROI点击后")
                     return
 
                 # 技能/撤退 ROI 外：有预输入技能则落盘，再视落点决定是否选中新干员
                 hit_grid = self._field_unit_hit(win_x, win_y)
-                self._log(f" ROI外 hit_grid={hit_grid} selected={self._selected_unit_grid}")
+                self._log(
+                    f"[状态机] 技能/撤退ROI外点击 hit_grid={hit_grid} "
+                    f"selected={self._selected_unit_grid}"
+                )
                 if self._pending_skill_grid is not None:
                     self._log(
-                        f" ROI外点击，落盘技能 grid={self._pending_skill_grid} "
-                        f"time_ms={self._pending_skill_last_ms}ms"
+                        f"[状态机] ROI外点击，落盘 pending_skill "
+                        f"grid={self._pending_skill_grid} @ {self._pending_skill_last_ms}ms"
                     )
                     self._record_raw_skill(self._pending_skill_grid, self._pending_skill_last_ms)
                     self._pending_skill_grid = None
                     self._pending_skill_first_ms = None
                     self._pending_skill_last_ms = None
                 else:
-                    self._log("UNIT_SELECTED 点击空地/其他，丢弃")
+                    self._log("[状态机] ROI外点击，无 pending_skill，视为空地/其他")
 
                 if hit_grid is not None and hit_grid != self._selected_unit_grid:
                     with self._lock:
                         self._state = "UNIT_SELECTED"
                         self._selected_unit_grid = hit_grid
-                    self._log(f"选中单位 @ {hit_grid} (ROI外命中)")
+                    self._log(f"[状态机] 选中单位 @ {hit_grid} (ROI外命中)")
                 else:
+                    self._log(
+                        f"[状态机] 未命中新单位，重置状态: hit_grid={hit_grid}"
+                    )
                     self._reset_state()
 
             elif state == "IDLE":
@@ -2120,12 +2163,22 @@ class ActionRecorder:
                 self._reset_state()
             elif char and char.lower() == action.skill_key():
                 now_ms = int(self._now_ms())
+                old_pending = self._pending_skill_grid
                 if self._pending_skill_grid is None:
                     self._pending_skill_grid = self._selected_unit_grid
                     self._pending_skill_first_ms = now_ms
                 self._pending_skill_last_ms = now_ms
-                self._log(f" {action.skill_key().upper()}键技能预输入 {self._selected_unit_grid} time_ms={now_ms}")
-                self._log_pending_skill("按E后")
+                if old_pending is None:
+                    self._log(
+                        f"[状态机] {action.skill_key().upper()}键首次技能预输入 "
+                        f"grid={self._selected_unit_grid} time_ms={now_ms}ms"
+                    )
+                else:
+                    self._log(
+                        f"[状态机] {action.skill_key().upper()}键再次技能预输入 "
+                        f"grid={self._selected_unit_grid} time_ms={now_ms}ms"
+                    )
+                self._log_pending_skill("[状态机] 按E后")
 
     # ------------------------------------------------------------------
     # 超时回调

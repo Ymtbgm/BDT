@@ -64,7 +64,7 @@ class TimerTab(QWidget):
         set_group_box_icon(debug_group, "debug.png")
         debug_layout = QHBoxLayout(debug_group)
         debug_layout.setContentsMargins(6, 6, 6, 6)
-        self.main_window.chk_timer_debug = QCheckBox("Debug 输出")
+        self.main_window.chk_timer_debug = QCheckBox("Debug")
         debug_layout.addWidget(QLabel("Debug输出"))
         debug_layout.addWidget(self.main_window.chk_timer_debug)
         debug_layout.addStretch()
