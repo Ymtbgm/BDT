@@ -4,31 +4,48 @@ import os
 import tempfile
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import QGroupBox
 
 from core.base.paths import gui_template
 
 
-def scaled_icon_path(filename: str, size: int = 20) -> str:
-    """加载 ui_icons 图标并缩放到指定大小，返回临时 PNG 路径供 QSS 使用。"""
+def scaled_icon_path(filename: str, size: int = 20, fast: bool = False) -> str:
+    """加载 ui_icons 图标并缩放到指定大小，返回临时 PNG 路径供 QSS 使用。
+
+    fast=True 时使用最近邻缩放（FastTransformation），适合线条简单的图标，
+    能避免 SmoothTransformation 带来的边缘柔化/模糊。
+    """
     src_path = str(gui_template("ui_icons") / filename)
     cache_dir = os.path.join(tempfile.gettempdir(), "bdt_gui_icons")
     os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, f"{filename}_{size}.png")
+    mode_key = "fast" if fast else "smooth"
+    cache_path = os.path.join(cache_dir, f"{filename}_{size}_{mode_key}.png")
     if os.path.exists(cache_path):
         return cache_path
     pixmap = QPixmap(src_path)
     if pixmap.isNull():
         return src_path
+    transform_mode = (
+        Qt.TransformationMode.FastTransformation
+        if fast
+        else Qt.TransformationMode.SmoothTransformation
+    )
     scaled = pixmap.scaled(
         size,
         size,
         aspectRatioMode=Qt.AspectRatioMode.KeepAspectRatio,
-        transformMode=Qt.TransformationMode.SmoothTransformation,
+        transformMode=transform_mode,
     )
     scaled.save(cache_path, "PNG")
     return cache_path
+
+
+def _set_group_box_bold_title(group: QGroupBox):
+    """将 QGroupBox 标题字体设为粗体（QSS 在某些样式下不生效，直接设置字体更可靠）。"""
+    font = group.font()
+    font.setBold(True)
+    group.setFont(font)
 
 
 def set_group_box_style(group: QGroupBox):
@@ -49,13 +66,15 @@ def set_group_box_style(group: QGroupBox):
         "  padding-top: 2px;"
         "  padding-bottom: 2px;"
         "  background-color: #fbfbfb;"
+        "  font-weight: bold;"
         "}"
     )
+    _set_group_box_bold_title(group)
 
 
 def set_group_box_icon(group: QGroupBox, filename: str, size: int = 20):
     """在 QGroupBox 标题左侧添加图标，并将整个 box 设为浅灰色以区分主背景。"""
-    icon_path = scaled_icon_path(filename, size).replace("\\", "/")
+    icon_path = scaled_icon_path(filename, size, fast=True).replace("\\", "/")
     group.setStyleSheet(
         f"QGroupBox {{"
         f"  background-color: #fbfbfb;"
@@ -75,5 +94,7 @@ def set_group_box_icon(group: QGroupBox, filename: str, size: int = 20):
         f"  background-image: url({icon_path});"
         f"  background-repeat: no-repeat;"
         f"  background-position: left center;"
+        f"  font-weight: bold;"
         f"}}"
     )
+    _set_group_box_bold_title(group)

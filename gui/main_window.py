@@ -580,6 +580,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         tabs = QTabWidget()
+        tabs.setStyleSheet("QTabBar::tab { font-weight: bold; }")
         self.setCentralWidget(tabs)
 
         self.exec_tab = ExecTab(self)

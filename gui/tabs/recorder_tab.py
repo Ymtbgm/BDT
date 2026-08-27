@@ -293,7 +293,7 @@ class RecorderTab(QWidget):
         self.main_window.rec_op_table = QTableWidget()
         self.main_window.rec_op_table.setColumnCount(2)
         self.main_window.rec_op_table.setHorizontalHeaderLabels(["干员名", "费用"])
-        self.main_window.rec_op_table.setMinimumHeight(270)
+        self.main_window.rec_op_table.setMinimumHeight(200)
         self.main_window.rec_op_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -342,7 +342,7 @@ class RecorderTab(QWidget):
         self.main_window.rec_item_table = QTableWidget()
         self.main_window.rec_item_table.setColumnCount(2)
         self.main_window.rec_item_table.setHorizontalHeaderLabels(["道具名", "次数"])
-        self.main_window.rec_item_table.setMinimumHeight(270)
+        self.main_window.rec_item_table.setMinimumHeight(200)
         self.main_window.rec_item_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -412,7 +412,13 @@ class RecorderTab(QWidget):
         self.main_window.rec_chk_probability_retry.stateChanged.connect(self.main_window._save_config)
         self.main_window.rec_loaded_script_path.textChanged.connect(self._update_loaded_script_status)
 
-        # 控制按钮
+        # 录制执行
+        exec_group = QGroupBox("录制执行")
+        set_group_box_icon(exec_group, "battle.png")
+        exec_layout = QVBoxLayout(exec_group)
+        exec_layout.setContentsMargins(6, 6, 6, 6)
+        exec_layout.setSpacing(6)
+
         btn_layout = QHBoxLayout()
         self.main_window.btn_rec_start = QPushButton("开始录制")
         self.main_window.btn_rec_start.setStyleSheet("background-color: #f44336; color: white;")
@@ -430,10 +436,11 @@ class RecorderTab(QWidget):
         btn_layout.addWidget(self.main_window.btn_rec_save)
 
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        exec_layout.addLayout(btn_layout)
 
         self.main_window.rec_status = QLabel("状态: 就绪")
-        layout.addWidget(self.main_window.rec_status)
+        exec_layout.addWidget(self.main_window.rec_status)
+        layout.addWidget(exec_group)
 
         layout.addStretch()
 

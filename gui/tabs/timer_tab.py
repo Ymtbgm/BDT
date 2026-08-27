@@ -33,24 +33,6 @@ class TimerTab(QWidget):
             )
         )
 
-        btn_layout = QHBoxLayout()
-        self.main_window.btn_timer_start = QPushButton("开始计时")
-        self.main_window.btn_timer_start.setStyleSheet("background-color: #4CAF50; color: white;")
-        self.main_window.btn_timer_start.clicked.connect(self._start_region_timer)
-        btn_layout.addWidget(self.main_window.btn_timer_start)
-
-        self.main_window.btn_timer_stop = QPushButton("停止计时")
-        self.main_window.btn_timer_stop.setEnabled(False)
-        self.main_window.btn_timer_stop.clicked.connect(self._stop_region_timer)
-        btn_layout.addWidget(self.main_window.btn_timer_stop)
-
-        self.main_window.btn_timer_reset = QPushButton("重置时间")
-        self.main_window.btn_timer_reset.clicked.connect(self._reset_region_timer)
-        btn_layout.addWidget(self.main_window.btn_timer_reset)
-
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-
         self.main_window.chk_timer_high_perf = QCheckBox("高精度模式")
         self.main_window.chk_timer_high_perf.setToolTip(
             "启用独立 TimeKeeper 线程和 1ms 系统定时器分辨率，"
@@ -59,16 +41,6 @@ class TimerTab(QWidget):
             "避免拖拽操作引入计时偏差。"
         )
         layout.addWidget(self.main_window.chk_timer_high_perf)
-
-        debug_group = QGroupBox("Debug")
-        set_group_box_icon(debug_group, "debug.png")
-        debug_layout = QHBoxLayout(debug_group)
-        debug_layout.setContentsMargins(6, 6, 6, 6)
-        self.main_window.chk_timer_debug = QCheckBox("Debug")
-        debug_layout.addWidget(QLabel("Debug输出"))
-        debug_layout.addWidget(self.main_window.chk_timer_debug)
-        debug_layout.addStretch()
-        layout.addWidget(debug_group)
 
         contract_group = QGroupBox("计时器费用条 tag")
         set_group_box_icon(contract_group, "warning.png")
@@ -85,8 +57,43 @@ class TimerTab(QWidget):
         contract_layout.addStretch()
         layout.addWidget(contract_group)
 
+        debug_group = QGroupBox("Debug")
+        set_group_box_icon(debug_group, "debug.png")
+        debug_layout = QHBoxLayout(debug_group)
+        debug_layout.setContentsMargins(6, 6, 6, 6)
+        self.main_window.chk_timer_debug = QCheckBox("Debug")
+        debug_layout.addWidget(QLabel("Debug输出"))
+        debug_layout.addWidget(self.main_window.chk_timer_debug)
+        debug_layout.addStretch()
+        layout.addWidget(debug_group)
+
+        control_group = QGroupBox("计时控制")
+        set_group_box_icon(control_group, "battle.png")
+        control_layout = QVBoxLayout(control_group)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(6)
+
+        btn_layout = QHBoxLayout()
+        self.main_window.btn_timer_start = QPushButton("开始计时")
+        self.main_window.btn_timer_start.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.main_window.btn_timer_start.clicked.connect(self._start_region_timer)
+        btn_layout.addWidget(self.main_window.btn_timer_start)
+
+        self.main_window.btn_timer_stop = QPushButton("停止计时")
+        self.main_window.btn_timer_stop.setEnabled(False)
+        self.main_window.btn_timer_stop.clicked.connect(self._stop_region_timer)
+        btn_layout.addWidget(self.main_window.btn_timer_stop)
+
+        self.main_window.btn_timer_reset = QPushButton("重置时间")
+        self.main_window.btn_timer_reset.clicked.connect(self._reset_region_timer)
+        btn_layout.addWidget(self.main_window.btn_timer_reset)
+
+        btn_layout.addStretch()
+        control_layout.addLayout(btn_layout)
+
         self.main_window.timer_status = QLabel("状态: 就绪")
-        layout.addWidget(self.main_window.timer_status)
+        control_layout.addWidget(self.main_window.timer_status)
+        layout.addWidget(control_group)
 
         info = QTextEdit()
         info.setReadOnly(True)

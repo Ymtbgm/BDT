@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
-from PyQt6.QtGui import QColor, QImage, QPalette, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QImage, QPalette, QPainter, QPixmap
 
 import action
 import cv2
@@ -312,7 +312,9 @@ class ExecTab(QWidget):
             )
         )
         log_title_layout.addWidget(log_icon)
-        log_title_layout.addWidget(QLabel("执行日志"))
+        log_title_label = QLabel("执行日志")
+        log_title_label.setStyleSheet("font-weight: bold;")
+        log_title_layout.addWidget(log_title_label)
         log_title_layout.addStretch()
         right_layout.addLayout(log_title_layout)
         contract_path = str(gui_template("Contract.png"))
