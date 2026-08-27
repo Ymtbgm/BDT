@@ -1,9 +1,8 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QTextEdit,
-    QGroupBox,
 )
 
-from gui.tabs._ui_utils import set_group_box_icon
+from gui.tabs._ui_utils import IconGroupBox
 
 
 class MatchstickTab(QWidget):
@@ -16,8 +15,7 @@ class MatchstickTab(QWidget):
         layout = QVBoxLayout(self)
 
         # 键位设置
-        keys_group = QGroupBox("键位设置")
-        set_group_box_icon(keys_group, "keyboard.png")
+        keys_group = IconGroupBox("键位设置", "keyboard.png")
         keys_layout = QVBoxLayout(keys_group)
         keys_layout.setContentsMargins(6, 6, 6, 6)
         keys_layout.setSpacing(6)

@@ -6,7 +6,7 @@ from gui._window_effects import (
     set_window_topmost,
     set_tool_window_style,
 )
-from gui.tabs._ui_utils import set_group_box_icon
+from gui.tabs._ui_utils import IconGroupBox
 from gui.timer_overlay import TimerOverlay
 
 from PyQt6.QtWidgets import (
@@ -42,8 +42,7 @@ class TimerTab(QWidget):
         )
         layout.addWidget(self.main_window.chk_timer_high_perf)
 
-        contract_group = QGroupBox("计时器费用条 tag")
-        set_group_box_icon(contract_group, "warning.png")
+        contract_group = IconGroupBox("计时器费用条 tag", "warning.png")
         contract_layout = QHBoxLayout(contract_group)
         contract_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.combo_timer_cost_tag = QComboBox()
@@ -57,8 +56,7 @@ class TimerTab(QWidget):
         contract_layout.addStretch()
         layout.addWidget(contract_group)
 
-        debug_group = QGroupBox("Debug")
-        set_group_box_icon(debug_group, "debug.png")
+        debug_group = IconGroupBox("Debug", "debug.png")
         debug_layout = QHBoxLayout(debug_group)
         debug_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.chk_timer_debug = QCheckBox("Debug")
@@ -67,8 +65,7 @@ class TimerTab(QWidget):
         debug_layout.addStretch()
         layout.addWidget(debug_group)
 
-        control_group = QGroupBox("计时控制")
-        set_group_box_icon(control_group, "battle.png")
+        control_group = IconGroupBox("计时控制", "battle.png")
         control_layout = QVBoxLayout(control_group)
         control_layout.setContentsMargins(6, 6, 6, 6)
         control_layout.setSpacing(6)

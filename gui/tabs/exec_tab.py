@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from core.base.paths import gui_template
-from gui.tabs._ui_utils import scaled_icon_path, set_group_box_icon
+from gui.tabs._ui_utils import scaled_icon_path, IconGroupBox
 from models.script_schema import ScriptModel
 
 
@@ -150,8 +150,7 @@ class ExecTab(QWidget):
         left_layout.setSpacing(12)
 
         # 脚本选择
-        script_group = QGroupBox("脚本选择")
-        set_group_box_icon(script_group, "choose.png")
+        script_group = IconGroupBox("脚本选择", "choose.png")
         script_layout = QHBoxLayout(script_group)
         self.main_window.exec_script_path = QLineEdit()
         self.main_window.exec_script_path.setPlaceholderText("选择脚本 JSON 文件...")
@@ -162,8 +161,7 @@ class ExecTab(QWidget):
         left_layout.addWidget(script_group)
 
         # 参数勾选
-        params_group = QGroupBox("运行参数")
-        set_group_box_icon(params_group, "level_setup.png")
+        params_group = IconGroupBox("运行参数", "level_setup.png")
         params_layout = QGridLayout(params_group)
         self.main_window.chk_loop = QCheckBox("无限凸图")
         self.main_window.chk_leak = QCheckBox("漏怪检测")
@@ -185,8 +183,7 @@ class ExecTab(QWidget):
         left_layout.addWidget(params_group)
 
         # Debug
-        debug_group = QGroupBox("Debug")
-        set_group_box_icon(debug_group, "debug.png")
+        debug_group = IconGroupBox("Debug", "debug.png")
         debug_layout = QHBoxLayout(debug_group)
         self.main_window.chk_debug.stateChanged.connect(self.main_window._save_config)
         debug_layout.addWidget(QLabel("Debug输出"))
@@ -195,8 +192,7 @@ class ExecTab(QWidget):
         left_layout.addWidget(debug_group)
 
         # 助战参数
-        support_group = QGroupBox("助战参数")
-        set_group_box_icon(support_group, "support_operator.png")
+        support_group = IconGroupBox("助战参数", "support_operator.png")
         support_layout = QGridLayout(support_group)
         self.main_window.chk_borrow_support = QCheckBox("借用干员")
         self.main_window.chk_borrow_support.stateChanged.connect(self._on_borrow_support_changed)
@@ -227,8 +223,7 @@ class ExecTab(QWidget):
         left_layout.addWidget(support_group)
 
         # 键位设置
-        keys_group = QGroupBox("键位设置")
-        set_group_box_icon(keys_group, "keyboard.png")
+        keys_group = IconGroupBox("键位设置", "keyboard.png")
         keys_layout = QGridLayout(keys_group)
         self.main_window.combo_pause_key = QComboBox()
         self.main_window.combo_pause_key.setEditable(True)
@@ -262,8 +257,7 @@ class ExecTab(QWidget):
         left_layout.addWidget(keys_group)
 
         # 合约选项
-        contract_group = QGroupBox("合约选项")
-        set_group_box_icon(contract_group, "warning.png")
+        contract_group = IconGroupBox("合约选项", "warning.png")
         contract_layout = QHBoxLayout(contract_group)
         contract_layout.addWidget(QLabel("费用回复 tag"))
         self.main_window.combo_cost_tag = QComboBox()
@@ -277,8 +271,7 @@ class ExecTab(QWidget):
         left_layout.addWidget(contract_group)
 
         # 按钮 + 状态
-        run_group = QGroupBox("执行控制")
-        set_group_box_icon(run_group, "battle.png")
+        run_group = IconGroupBox("执行控制", "battle.png")
         run_layout = QVBoxLayout(run_group)
         btn_layout = QHBoxLayout()
         self.main_window.btn_run = QPushButton("运行脚本")

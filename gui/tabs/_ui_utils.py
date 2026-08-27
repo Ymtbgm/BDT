@@ -4,8 +4,8 @@ import os
 import tempfile
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QPixmap
-from PyQt6.QtWidgets import QGroupBox
+from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap
+from PyQt6.QtWidgets import QGroupBox, QStyle, QStyleOptionGroupBox
 
 from core.base.paths import gui_template
 
@@ -72,29 +72,80 @@ def set_group_box_style(group: QGroupBox):
     _set_group_box_bold_title(group)
 
 
-def set_group_box_icon(group: QGroupBox, filename: str, size: int = 20):
-    """在 QGroupBox 标题左侧添加图标，并将整个 box 设为浅灰色以区分主背景。"""
-    icon_path = scaled_icon_path(filename, size, fast=True).replace("\\", "/")
-    group.setStyleSheet(
-        f"QGroupBox {{"
-        f"  background-color: #fbfbfb;"
-        f"  border: 1px solid #dddddd;"
-        f"  border-radius: 4px;"
-        f"  margin-top: {size + 6}px;"
-        f"}}"
-        f"QGroupBox::title {{"
-        f"  subcontrol-origin: margin;"
-        f"  subcontrol-position: top left;"
-        f"  left: 8px;"
-        f"  padding-left: {size + 6}px;"
-        f"  padding-right: 4px;"
-        f"  padding-top: 2px;"
-        f"  padding-bottom: 2px;"
-        f"  background-color: #fbfbfb;"
-        f"  background-image: url({icon_path});"
-        f"  background-repeat: no-repeat;"
-        f"  background-position: left center;"
-        f"  font-weight: bold;"
-        f"}}"
-    )
-    _set_group_box_bold_title(group)
+class IconGroupBox(QGroupBox):
+    """带图标的 QGroupBox，使用 QIcon + QPainter 直接绘制图标。
+
+    相比 QSS background-image，这种方式和 QTabWidget.setTabIcon 走同一条
+    渲染路径，能正确处理高 DPI 缩放，避免样式引擎二次拉伸导致的模糊。
+    """
+
+    def __init__(self, title: str, icon_filename: str, icon_size: int = 20, parent=None):
+        super().__init__(title, parent)
+        self._icon_filename = icon_filename
+        self._icon_size = icon_size
+        self._icon: QIcon | None = None
+        self._load_icon()
+        self._setup_style()
+
+    def _load_icon(self):
+        icon_path = str(gui_template("ui_icons") / self._icon_filename)
+        pixmap = QPixmap(icon_path)
+        if not pixmap.isNull():
+            self._icon = QIcon(pixmap)
+        else:
+            self._icon = None
+
+    def _setup_style(self):
+        size = self._icon_size
+        self.setStyleSheet(
+            f"QGroupBox {{"
+            f"  background-color: #fbfbfb;"
+            f"  border: 1px solid #dddddd;"
+            f"  border-radius: 4px;"
+            f"  margin-top: {size + 6}px;"
+            f"}}"
+            f"QGroupBox::title {{"
+            f"  subcontrol-origin: margin;"
+            f"  subcontrol-position: top left;"
+            f"  left: {size + 14}px;"
+            f"  padding-left: 4px;"
+            f"  padding-right: 4px;"
+            f"  padding-top: 2px;"
+            f"  padding-bottom: 2px;"
+            f"  background-color: #fbfbfb;"
+            f"  font-weight: bold;"
+            f"}}"
+        )
+        font = self.font()
+        font.setBold(True)
+        self.setFont(font)
+
+    def paintEvent(self, event):
+        # 先让父类画出完整的 group box（含标题文字）
+        super().paintEvent(event)
+        if self._icon is None:
+            return
+
+        option = QStyleOptionGroupBox()
+        self.initStyleOption(option)
+        label_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_GroupBox,
+            option,
+            QStyle.SubControl.SC_GroupBoxLabel,
+            self,
+        )
+
+        # 在标题文字左侧绘制图标，像 tab 图标一样使用 QIcon.paint
+        painter = QPainter(self)
+        icon_size = self._icon_size
+        x = label_rect.left() - icon_size - 6
+        y = label_rect.top() + (label_rect.height() - icon_size) // 2
+        self._icon.paint(painter, x, y, icon_size, icon_size)
+        painter.end()
+
+
+def create_icon_group_box(
+    title: str, icon_filename: str, icon_size: int = 20, parent=None
+) -> IconGroupBox:
+    """创建带图标的 IconGroupBox，保持和原 set_group_box_icon 接近的调用方式。"""
+    return IconGroupBox(title, icon_filename, icon_size, parent)

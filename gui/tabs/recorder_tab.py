@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QTimer, QMetaObject, Q_ARG, QThread
 
 import action
 from core.base.paths import get_project_root
-from gui.tabs._ui_utils import set_group_box_icon
+from gui.tabs._ui_utils import IconGroupBox
 from core.capture.capture import WindowCapture
 from core.vision.ocr_engine import OCREngine
 from core.recording.recorder import ActionRecorder
@@ -154,8 +154,7 @@ class RecorderTab(QWidget):
         layout = QVBoxLayout(self)
 
         # 参数区域：每行一个 QHBoxLayout，输入框紧跟标签，不居中展开
-        param_group = QGroupBox("录制参数")
-        set_group_box_icon(param_group, "level_setup.png")
+        param_group = IconGroupBox("录制参数", "level_setup.png")
         param_layout = QVBoxLayout(param_group)
         param_layout.setContentsMargins(6, 6, 6, 6)
         param_layout.setSpacing(6)
@@ -286,8 +285,7 @@ class RecorderTab(QWidget):
         param_layout.addLayout(row)
 
         # 干员列表 + 道具列表并排
-        op_group = QGroupBox("干员列表")
-        set_group_box_icon(op_group, "operator.png")
+        op_group = IconGroupBox("干员列表", "operator.png")
         op_layout = QVBoxLayout(op_group)
         op_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.rec_op_table = QTableWidget()
@@ -335,8 +333,7 @@ class RecorderTab(QWidget):
         op_input_layout.addWidget(self.main_window.rec_op_down_btn, 0)
         op_layout.addLayout(op_input_layout)
 
-        item_group = QGroupBox("道具列表")
-        set_group_box_icon(item_group, "item.png")
+        item_group = IconGroupBox("道具列表", "item.png")
         item_layout = QVBoxLayout(item_group)
         item_layout.setContentsMargins(6, 6, 6, 6)
         self.main_window.rec_item_table = QTableWidget()
@@ -413,8 +410,7 @@ class RecorderTab(QWidget):
         self.main_window.rec_loaded_script_path.textChanged.connect(self._update_loaded_script_status)
 
         # 录制执行
-        exec_group = QGroupBox("录制执行")
-        set_group_box_icon(exec_group, "battle.png")
+        exec_group = IconGroupBox("录制执行", "battle.png")
         exec_layout = QVBoxLayout(exec_group)
         exec_layout.setContentsMargins(6, 6, 6, 6)
         exec_layout.setSpacing(6)

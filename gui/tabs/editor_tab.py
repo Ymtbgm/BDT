@@ -13,7 +13,7 @@ from PyQt6.QtGui import QColor, QBrush
 
 from core.special_behaviors import get_registry, ConfigField
 from core.special_behaviors.probability_checkpoints import get_method_registry
-from gui.tabs._ui_utils import set_group_box_icon
+from gui.tabs._ui_utils import IconGroupBox
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo, SummonInfo
 
 
@@ -82,8 +82,7 @@ class EditorTab(QWidget):
         top_bar = QHBoxLayout()
         top_bar.setSpacing(6)
 
-        stage_group = QGroupBox("关卡代号")
-        set_group_box_icon(stage_group, "code.png")
+        stage_group = IconGroupBox("关卡代号", "code.png")
         stage_group_layout = QHBoxLayout(stage_group)
         stage_group_layout.setContentsMargins(6, 6, 6, 6)
         stage_group_layout.setSpacing(6)
@@ -112,8 +111,7 @@ class EditorTab(QWidget):
         lists_panel.setSpacing(4)
 
         # ---- 部署区干员初始列表 ----
-        op_widget = QGroupBox("部署区干员初始列表")
-        set_group_box_icon(op_widget, "operator.png")
+        op_widget = IconGroupBox("部署区干员初始列表", "operator.png")
         op_layout = QVBoxLayout(op_widget)
         op_layout.setContentsMargins(6, 6, 6, 6)
         op_layout.setSpacing(3)
@@ -142,8 +140,7 @@ class EditorTab(QWidget):
         lists_panel.addWidget(op_widget, 0, 0)
 
         # ---- 部署区道具初始列表 ----
-        item_widget = QGroupBox("部署区道具初始列表")
-        set_group_box_icon(item_widget, "item.png")
+        item_widget = IconGroupBox("部署区道具初始列表", "item.png")
         item_layout = QVBoxLayout(item_widget)
         item_layout.setContentsMargins(6, 6, 6, 6)
         item_layout.setSpacing(3)
@@ -194,8 +191,7 @@ class EditorTab(QWidget):
         lists_panel.addWidget(item_widget, 0, 1)
 
         # ---- 特殊召唤物 ----
-        summon_widget = QGroupBox("特殊召唤物")
-        set_group_box_icon(summon_widget, "summon.png")
+        summon_widget = IconGroupBox("特殊召唤物", "summon.png")
         summon_layout = QVBoxLayout(summon_widget)
         summon_layout.setContentsMargins(6, 6, 6, 6)
         summon_layout.setSpacing(3)
@@ -241,8 +237,7 @@ class EditorTab(QWidget):
         lists_panel.addWidget(summon_widget, 1, 0)
 
         # ---- 特殊行为 ----
-        special_widget = QGroupBox("特殊行为")
-        set_group_box_icon(special_widget, "special_behavior.png")
+        special_widget = IconGroupBox("特殊行为", "special_behavior.png")
         special_layout = QVBoxLayout(special_widget)
         special_layout.setContentsMargins(6, 6, 6, 6)
         special_layout.setSpacing(3)
@@ -272,8 +267,7 @@ class EditorTab(QWidget):
         content_layout.addWidget(lists_widget, 0)
 
         # 中间：时间轴列表
-        mid_panel_widget = QGroupBox("时间轴操作")
-        set_group_box_icon(mid_panel_widget, "timeline.png")
+        mid_panel_widget = IconGroupBox("时间轴操作", "timeline.png")
         mid_panel = QVBoxLayout(mid_panel_widget)
         mid_panel.setContentsMargins(6, 6, 6, 6)
         mid_panel.setSpacing(4)
@@ -320,8 +314,7 @@ class EditorTab(QWidget):
         content_layout.addWidget(mid_panel_widget, 3)
 
         # 右侧：操作详情
-        right_panel_widget = QGroupBox("操作属性")
-        set_group_box_icon(right_panel_widget, "Attribute.png")
+        right_panel_widget = IconGroupBox("操作属性", "Attribute.png")
         right_panel = QVBoxLayout(right_panel_widget)
         right_panel.setContentsMargins(6, 6, 6, 6)
         right_panel.setSpacing(4)
