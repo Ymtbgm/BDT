@@ -1880,16 +1880,31 @@ class ActionRecorder:
 
             elif state == "AWAITING_DIRECTION":
                 bar_idx = self._bar_index_at(win_x, win_y)
+                hit_grid = self._field_unit_hit(win_x, win_y)
                 if bar_idx is not None:
-                    # 用户在等待方向时又回到部署栏点干员，说明想放弃当前部署并重新部署。
-                    # 取消当前方向选择的超时，不记录这次未完成的 DEPLOY，直接开始新拖拽。
+                    # 用户在等待方向时又回到部署栏点干员，说明想结束当前部署并开始下一次部署。
+                    # 先把当前 pending 的 DEPLOY 按无方向落盘，再开始新拖拽。
                     self._log(
-                        f"AWAITING_DIRECTION 时在部署区 mouseDown (slot[{bar_idx}])，"
-                        f"取消当前方向选择并开始新部署"
+                        f"AWAITING_DIRECTION 时在部署栏 mouseDown (slot[{bar_idx}])，"
+                        f"落盘当前部署为无方向并开始新部署"
                     )
+                    self._flush_pending_deploy(direction=None)
                     self._cancel_timeout()
                     self._reset_state()
                     self._start_deploy_drag(win_x, win_y, bar_idx)
+                elif hit_grid is not None:
+                    # 用户在等待方向时点中了场上已部署干员，视为想选中该干员。
+                    # 先把当前 pending 的 DEPLOY 按无方向落盘，再切换到选中状态。
+                    self._log(
+                        f"AWAITING_DIRECTION 时命中已部署干员 {hit_grid}，"
+                        f"落盘当前部署为无方向并切换选中"
+                    )
+                    self._flush_pending_deploy(direction=None)
+                    self._cancel_timeout()
+                    self._reset_state()
+                    with self._lock:
+                        self._state = "UNIT_SELECTED"
+                        self._selected_unit_grid = hit_grid
                 else:
                     grid = self._pending.get("grid")
                     dir_invalid = False
@@ -2183,29 +2198,28 @@ class ActionRecorder:
     # ------------------------------------------------------------------
     # 超时回调
     # ------------------------------------------------------------------
+    def _flush_pending_deploy(self, direction: Optional[str] = None):
+        """将当前 AWAITING_DIRECTION 中 pending 的 DEPLOY 落盘，不修改状态机。"""
+        with self._lock:
+            pending = self._pending
+        if pending and pending.get("type") == "DEPLOY":
+            click_ratio = pending["click_ratio_from_right"]
+            grid = pending["grid"]
+            time_ms = pending["time_ms"]
+            keyframe_id = pending.get("keyframe_id")
+            name_card_id = pending.get("name_card_keyframe_id")
+            keyframe_ids = [k for k in (keyframe_id, name_card_id) if k]
+            self._record_raw_deploy(click_ratio, grid, direction, time_ms, keyframe_ids)
+
+    # ------------------------------------------------------------------
     def _on_deploy_timeout(self):
         with self._lock:
             if self._state != "AWAITING_DIRECTION":
                 self._log(f"方向选择超时回调被忽略，当前 state={self._state}")
                 return
-            pending = self._pending
-        if pending and pending.get("type") == "DEPLOY":
-            click_ratio = pending["click_ratio_from_right"]
-            self._log(
-                f"方向选择超时 ratio={click_ratio:.4f} grid={pending['grid']}"
-            )
-            grid = pending["grid"]
-            time_ms = pending["time_ms"]
-            keyframe_id = pending.get("keyframe_id")
-            name_card_id = pending.get("name_card_keyframe_id")
-            self._reset_state()
-            keyframe_ids = [k for k in (keyframe_id, name_card_id) if k]
-            self._record_raw_deploy(
-                click_ratio, grid, None,
-                time_ms, keyframe_ids,
-            )
-        else:
-            self._reset_state()
+        self._log("方向选择超时，落盘为无方向部署")
+        self._flush_pending_deploy(direction=None)
+        self._reset_state()
         self._log("方向选择超时，已重置状态")
 
     # ------------------------------------------------------------------
