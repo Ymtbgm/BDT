@@ -1902,6 +1902,7 @@ class ActionRecorder:
                 elif hit_grid is not None:
                     # 用户在等待方向时点中了场上已部署干员，暂存目标，
                     # 等到 mouseUp 确认后再落盘部署并切换选中。
+                    # 同时记录方向起点，若释放时未确认选中则按原方向逻辑处理。
                     self._log(
                         f"AWAITING_DIRECTION 时 mouseDown 命中已部署干员 {hit_grid}，"
                         f"等待释放确认选中"
@@ -1909,6 +1910,22 @@ class ActionRecorder:
                     with self._lock:
                         self._pending_select_grid = hit_grid
                         self._pending_select_down_pos = (win_x, win_y)
+                    grid = self._pending.get("grid")
+                    dir_invalid = False
+                    if grid is not None:
+                        gx, gy = self.tile_calc.get_screen_pos(*grid, side=True)
+                        max_dist = self._DIR_START_MAX_DIST * min(self._scale_x, self._scale_y)
+                        dist = ((win_x - gx) ** 2 + (win_y - gy) ** 2) ** 0.5
+                        if dist > max_dist:
+                            dir_invalid = True
+                            self._log(
+                                f" AWAITING_DIRECTION mouseDown 起点距离 grid={grid} 过远 "
+                                f"({dist:.0f}px > {max_dist:.0f}px)，视为无方向"
+                            )
+                    with self._lock:
+                        self._pending["dir_down_pos"] = (win_x, win_y)
+                        self._pending["dir_invalid"] = dir_invalid
+                    self._log(f" AWAITING_DIRECTION mouseDown dir_down=({win_x:.0f},{win_y:.0f})")
                 else:
                     grid = self._pending.get("grid")
                     dir_invalid = False
@@ -1978,23 +1995,39 @@ class ActionRecorder:
                 # 如果 mouseDown 命中了已部署干员，先判断释放是否确认选中
                 if self._pending_select_grid is not None:
                     release_grid = self._field_unit_hit(win_x, win_y)
-                    select_confirmed = release_grid == self._pending_select_grid
-                    if not select_confirmed and self._pending_select_down_pos is not None:
+                    select_confirmed = False
+                    select_reason = ""
+
+                    if self._pending_select_down_pos is not None:
                         dx = win_x - self._pending_select_down_pos[0]
                         dy = win_y - self._pending_select_down_pos[1]
                         dist = (dx ** 2 + dy ** 2) ** 0.5
                         max_dist = self._DIR_THRESHOLD * min(self._scale_x, self._scale_y)
-                        if dist <= max_dist:
+
+                        if release_grid == self._pending_select_grid:
+                            if dist <= max_dist:
+                                select_confirmed = True
+                                select_reason = (
+                                    f"释放命中原干员且拖动距离 {dist:.0f}px <= {max_dist:.0f}px"
+                                )
+                            else:
+                                self._log(
+                                    f" AWAITING_DIRECTION 释放点命中原干员 "
+                                    f"{self._pending_select_grid}，"
+                                    f"但拖动距离 {dist:.0f}px > {max_dist:.0f}px，"
+                                    f"视为方向选择而非选中"
+                                )
+                        elif dist <= max_dist:
                             select_confirmed = True
-                            self._log(
-                                f" AWAITING_DIRECTION 释放点未命中格子，"
-                                f"但距离按下点 {dist:.0f}px <= {max_dist:.0f}px，"
-                                f"视为确认选中 {self._pending_select_grid}"
+                            select_reason = (
+                                f"释放未命中格子但距离按下点 {dist:.0f}px <= {max_dist:.0f}px"
                             )
+
                     if select_confirmed:
                         self._log(
                             f"[状态机] AWAITING_DIRECTION 释放确认选中 "
-                            f"grid={self._pending_select_grid}，落盘当前部署为无方向"
+                            f"grid={self._pending_select_grid}，{select_reason}，"
+                            f"落盘当前部署为无方向"
                         )
                         self._flush_pending_deploy(direction=None)
                         grid = self._pending_select_grid
@@ -2003,15 +2036,15 @@ class ActionRecorder:
                             self._state = "UNIT_SELECTED"
                             self._selected_unit_grid = grid
                         self._log(f"[状态机] 选中单位 @ {grid} (AWAITING_DIRECTION 释放确认)")
+                        return
                     else:
                         self._log(
-                            f"[状态机] AWAITING_DIRECTION 释放未命中原干员 "
-                            f"({release_grid} != {self._pending_select_grid})，"
-                            f"按无方向落盘"
+                            f"[状态机] AWAITING_DIRECTION 未确认选中 "
+                            f"({release_grid} != {self._pending_select_grid})，按方向逻辑处理"
                         )
-                        self._flush_pending_deploy(direction=None)
-                        self._reset_state()
-                    return
+                    # 未确认选中，继续走下面的方向逻辑；先清理 pending select
+                    self._pending_select_grid = None
+                    self._pending_select_down_pos = None
 
                 dir_pos = self._pending.get("dir_down_pos")
                 grid = self._pending["grid"]

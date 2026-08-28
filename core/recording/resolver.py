@@ -1926,21 +1926,7 @@ class OfflineResolver:
                 self._item_bar_index[slot.name] = self._item_bar_index_for_name(pre_states, slot.name)
                 self._log(f"新道具 slot {slot.name} quantity={slot.quantity}")
 
-        # 5. 干员部署未选择方向时，视为用户取消部署；保留新增召唤物/道具状态，
-        #    但不生成 DEPLOY、不移除该干员 slot。
-        if (
-            not deployed.is_item
-            and not deployed.is_summon
-            and raw.direction is None
-        ):
-            self._log(
-                f"DEPLOY @ {raw.time_ms} 干员 {deployed.name} 未选择方向，视为取消"
-            )
-            self._prev_bar_state = pre_states
-            self._log(f"  DEPLOY @ {raw.time_ms} 总耗时={(time.perf_counter()-t0)*1000:.1f}ms")
-            return
-
-        # 6. 生成本次 DEPLOY
+        # 5. 生成本次 DEPLOY
         t_gen = time.perf_counter()
         if deployed.is_item:
             self._deploy_item(raw, deployed)
@@ -1978,17 +1964,6 @@ class OfflineResolver:
             )
             deployed = None
             is_summon = False
-
-        # 干员部署未选择方向时视为取消
-        if (
-            not is_item
-            and not is_summon
-            and raw.direction is None
-        ):
-            self._log(
-                f"DEPLOY @ {raw.time_ms} 干员 {name} 未选择方向（兜底路径），视为取消"
-            )
-            return
 
         if is_item:
             self._deploy_item(raw, deployed or _SlotState(name=name, is_item=True, quantity=1))
