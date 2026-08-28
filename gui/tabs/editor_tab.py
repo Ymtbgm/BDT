@@ -586,14 +586,20 @@ class EditorTab(QWidget):
         self._sync_items_to_script()
 
     def _refresh_summons_table(self):
-        """按费用从低到高刷新特殊召唤物表格，同费用保持用户添加顺序。"""
+        """按费用从低到高刷新特殊召唤物表格，同费用保持用户添加顺序。
+
+        无限道具（同时出现在 items 中的 summon）只在道具列表显示，不在这里重复显示。
+        """
         self.main_window.summons_table.blockSignals(True)
         self.main_window.summons_table.setRowCount(0)
+        item_names = {it.name for it in self.main_window.script.items}
         sorted_summons = sorted(
             enumerate(self.main_window.script.summons),
             key=lambda x: (x[1].cost, x[0]),
         )
         for display_row, (user_index, summon) in enumerate(sorted_summons):
+            if summon.name in item_names:
+                continue
             self.main_window.summons_table.insertRow(display_row)
             name_item = QTableWidgetItem(summon.name)
             name_item.setData(Qt.ItemDataRole.UserRole, user_index)
@@ -677,6 +683,7 @@ class EditorTab(QWidget):
         current = self.main_window.combo_op.currentText()
         self.main_window.combo_op.blockSignals(True)
         self.main_window.combo_op.clear()
+        item_names = {it.name for it in self.main_window.script.items}
         for op in self.main_window.script.operators:
             self.main_window.combo_op.addItem(op)
         if self.main_window.script.items:
@@ -684,6 +691,8 @@ class EditorTab(QWidget):
                 self.main_window.combo_op.addItem(item.name)
         if self.main_window.script.summons:
             for summon in self.main_window.script.summons:
+                if summon.name in item_names:
+                    continue
                 self.main_window.combo_op.addItem(summon.name)
         idx = self.main_window.combo_op.findText(current)
         if idx >= 0:
