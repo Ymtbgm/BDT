@@ -104,6 +104,17 @@ class OperatorPool:
     def _is_summon(self, name: str) -> bool:
         return name in self._summons
 
+    def _is_infinite_item(self, name: str) -> bool:
+        """判断是否为无限道具：脚本中同名条目同时出现在 items 和 summons 中。"""
+        return name in self._item_charges and name in self._summons
+
+    def _item_original_bar_index(self, name: str) -> int:
+        """返回道具在初始道具区中的原始 bar_index（从右到左，0=最右侧）。"""
+        for i, it in enumerate(reversed(self.items)):
+            if it.name == name:
+                return i
+        return 0
+
     def is_summon(self, name: str) -> bool:
         return self._is_summon(name)
 
@@ -372,29 +383,46 @@ class OperatorPool:
         slots: List[Dict[str, Any]] = []
         # 道具区域：_available_items 本身已是从右到左顺序
         for i, name in enumerate(self._available_items):
-            slots.append({
-                "name": name,
-                "is_item": True,
-                "is_summon": False,
-                "is_infinite": False,
-                "quantity": self._item_charges.get(name),
-                "cost": 0,
-                "original_bar_index": i,
-            })
+            if self._is_infinite_item(name):
+                # 无限道具按召唤物处理，不带数量角标，保留真实费用
+                slots.append({
+                    "name": name,
+                    "is_item": False,
+                    "is_summon": True,
+                    "is_infinite": True,
+                    "quantity": None,
+                    "cost": self._summons[name],
+                    "original_bar_index": i,
+                })
+            else:
+                slots.append({
+                    "name": name,
+                    "is_item": True,
+                    "is_summon": False,
+                    "is_infinite": False,
+                    "quantity": self._item_charges.get(name),
+                    "cost": 0,
+                    "original_bar_index": i,
+                })
         item_count = len(self._available_items)
         # 干员/召唤物区域：_get_left_units 返回从左到右顺序，反转为从右到左
         left_units = self._get_left_units()
         for offset, name in enumerate(reversed(left_units)):
             bar_index = item_count + offset
             if name in self._summons:
+                is_infinite = self._is_infinite_item(name)
                 slots.append({
                     "name": name,
                     "is_item": False,
                     "is_summon": True,
-                    "is_infinite": False,
-                    "quantity": self._summon_charges.get(name),
+                    "is_infinite": is_infinite,
+                    "quantity": None if is_infinite else self._summon_charges.get(name),
                     "cost": self._summons[name],
-                    "original_bar_index": bar_index,
+                    "original_bar_index": (
+                        self._item_original_bar_index(name)
+                        if is_infinite
+                        else bar_index
+                    ),
                 })
             else:
                 slots.append({

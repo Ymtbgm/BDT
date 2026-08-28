@@ -155,6 +155,7 @@ class RecorderTab(QWidget):
 
         # 参数区域：每行一个 QHBoxLayout，输入框紧跟标签，不居中展开
         param_group = IconGroupBox("录制参数", "level_setup.png")
+        self.main_window.rec_param_group = param_group
         param_layout = QVBoxLayout(param_group)
         param_layout.setContentsMargins(6, 6, 6, 6)
         param_layout.setSpacing(6)
@@ -169,7 +170,8 @@ class RecorderTab(QWidget):
         param_layout.addLayout(row)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("装载脚本:"))
+        self.main_window.rec_loaded_script_label = QLabel("装载脚本:")
+        row.addWidget(self.main_window.rec_loaded_script_label)
         self.main_window.rec_loaded_script_path = QLineEdit()
         self.main_window.rec_loaded_script_path.setPlaceholderText("选择要预执行的脚本...")
         self.main_window.rec_loaded_script_path.setReadOnly(True)
@@ -186,7 +188,8 @@ class RecorderTab(QWidget):
         param_layout.addLayout(row)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("初始干员数量:"))
+        self.main_window.rec_initial_operator_count_label = QLabel("初始干员数量:")
+        row.addWidget(self.main_window.rec_initial_operator_count_label)
         self.main_window.rec_initial_operator_count = QSpinBox()
         self.main_window.rec_initial_operator_count.setRange(0, 13)
         self.main_window.rec_initial_operator_count.setValue(12)
@@ -203,7 +206,8 @@ class RecorderTab(QWidget):
         param_layout.addLayout(row)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("初始道具数量:"))
+        self.main_window.rec_initial_item_count_label = QLabel("初始道具数量:")
+        row.addWidget(self.main_window.rec_initial_item_count_label)
         self.main_window.rec_initial_item_count = QSpinBox()
         self.main_window.rec_initial_item_count.setRange(0, 12)
         self.main_window.rec_initial_item_count.setValue(0)
@@ -215,7 +219,8 @@ class RecorderTab(QWidget):
         param_layout.addLayout(row)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("接管快捷键:"))
+        self.main_window.rec_takeover_hotkey_label = QLabel("接管快捷键:")
+        row.addWidget(self.main_window.rec_takeover_hotkey_label)
         self.main_window.rec_takeover_hotkey = QLineEdit()
         self.main_window.rec_takeover_hotkey.setPlaceholderText("F9")
         self.main_window.rec_takeover_hotkey.setMaximumWidth(80)
@@ -411,6 +416,7 @@ class RecorderTab(QWidget):
 
         # 录制执行
         exec_group = IconGroupBox("录制执行", "battle.png")
+        self.main_window.rec_exec_group = exec_group
         exec_layout = QVBoxLayout(exec_group)
         exec_layout.setContentsMargins(6, 6, 6, 6)
         exec_layout.setSpacing(6)

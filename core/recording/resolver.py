@@ -701,33 +701,36 @@ class OfflineResolver:
         slots: List[_SlotState] = []
         self._remaining_item_count = 0
         for i, d in enumerate(state_dicts):
+            orig_idx = d.get("original_bar_index", i)
             slot = _SlotState(
                 name=d.get("name", f"__unknown_{i}__"),
                 is_item=bool(d.get("is_item", False)),
                 is_summon=bool(d.get("is_summon", False)),
                 is_infinite=bool(d.get("is_infinite", False)),
-                original_bar_index=d.get("original_bar_index", i),
+                original_bar_index=orig_idx,
                 quantity=d.get("quantity"),
                 cost=d.get("cost"),
                 avatar=None,
             )
             slots.append(slot)
-            if slot.is_item:
-                self._item_bar_index[slot.name] = i
+            if slot.is_infinite:
+                # 无限道具：按召唤物处理，但不计入普通道具数量
+                self._infinite_items[orig_idx] = _InfiniteItem(
+                    original_bar_index=orig_idx,
+                    expected_cost=slot.cost or 0,
+                    name=slot.name,
+                    present=True,
+                    avatar=None,
+                )
+                self._summon_costs[slot.name] = slot.cost or 0
+                self._summon_deploy_counts[slot.name] = 0
+                self._item_bar_index[slot.name] = orig_idx
+            elif slot.is_item:
+                self._item_bar_index[slot.name] = orig_idx
                 self._item_initial_quantity[slot.name] = (
                     slot.quantity if slot.quantity is not None else 1
                 )
                 self._remaining_item_count += 1
-                if slot.is_infinite:
-                    self._infinite_items[i] = _InfiniteItem(
-                        original_bar_index=i,
-                        expected_cost=slot.cost or 0,
-                        name=slot.name,
-                        present=True,
-                        avatar=None,
-                    )
-                    self._summon_costs[slot.name] = slot.cost or 0
-                    self._summon_deploy_counts[slot.name] = 0
             elif slot.is_summon:
                 self._summon_costs[slot.name] = slot.cost or 0
                 self._summon_deploy_counts[slot.name] = 0

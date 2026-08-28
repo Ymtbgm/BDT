@@ -16,6 +16,7 @@ class MatchstickTab(QWidget):
 
         # 键位设置
         keys_group = IconGroupBox("键位设置", "keyboard.png")
+        self.main_window.matchstick_keys_group = keys_group
         keys_layout = QVBoxLayout(keys_group)
         keys_layout.setContentsMargins(6, 6, 6, 6)
         keys_layout.setSpacing(6)

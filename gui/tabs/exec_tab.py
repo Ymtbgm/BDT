@@ -8,14 +8,14 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
-from PyQt6.QtGui import QColor, QFont, QImage, QPalette, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QIcon, QImage, QPalette, QPainter, QPixmap
 
 import action
 import cv2
 import numpy as np
 
 from core.base.paths import gui_template
-from gui.tabs._ui_utils import scaled_icon_path, IconGroupBox
+from gui.tabs._ui_utils import IconGroupBox
 from models.script_schema import ScriptModel
 
 
@@ -151,6 +151,7 @@ class ExecTab(QWidget):
 
         # 脚本选择
         script_group = IconGroupBox("脚本选择", "choose.png")
+        self.main_window.script_group = script_group
         script_layout = QHBoxLayout(script_group)
         self.main_window.exec_script_path = QLineEdit()
         self.main_window.exec_script_path.setPlaceholderText("选择脚本 JSON 文件...")
@@ -224,6 +225,7 @@ class ExecTab(QWidget):
 
         # 键位设置
         keys_group = IconGroupBox("键位设置", "keyboard.png")
+        self.main_window.exec_keys_group = keys_group
         keys_layout = QGridLayout(keys_group)
         self.main_window.combo_pause_key = QComboBox()
         self.main_window.combo_pause_key.setEditable(True)
@@ -298,11 +300,7 @@ class ExecTab(QWidget):
         log_title_layout.setSpacing(4)
         log_icon = QLabel()
         log_icon.setPixmap(
-            QPixmap(scaled_icon_path("log.png", 20)).scaled(
-                20, 20,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            QIcon(str(gui_template("ui_icons") / "log.png")).pixmap(20, 20)
         )
         log_title_layout.addWidget(log_icon)
         log_title_label = QLabel("执行日志")

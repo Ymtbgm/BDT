@@ -107,7 +107,7 @@ class IconGroupBox(QGroupBox):
             f"QGroupBox::title {{"
             f"  subcontrol-origin: margin;"
             f"  subcontrol-position: top left;"
-            f"  left: {size + 14}px;"
+            f"  left: {size + 11}px;"
             f"  padding-left: 4px;"
             f"  padding-right: 4px;"
             f"  padding-top: 2px;"

@@ -21,6 +21,7 @@ from core.game_state.region_state_timer import RegionStateTimer
 from core.recording.recorder import ActionRecorder
 from core.base.paths import get_project_root, gui_template
 from gui.timer_overlay import TimerOverlay
+from gui.guide_overlay import GuideOverlay
 from gui.widgets.checked_combo_box import CheckedComboBox
 from models.script_schema import ScriptModel, OperatorAction, ActionType, ItemInfo
 from gui.tabs import (
@@ -51,6 +52,8 @@ class MainWindow(QMainWindow):
     recorder_tab: RecorderTab
 
     # 脚本执行 Tab
+    script_group: QWidget
+    exec_keys_group: QWidget
     exec_script_path: QLineEdit
     btn_browse: QPushButton
     chk_loop: QCheckBox
@@ -131,6 +134,7 @@ class MainWindow(QMainWindow):
     label_levels_update_status: QLabel
 
     # 划火柴 Tab
+    matchstick_keys_group: QWidget
     chk_matchstick_select: QCheckBox
     line_matchstick_select: QLineEdit
     chk_matchstick_166: QCheckBox
@@ -146,17 +150,23 @@ class MainWindow(QMainWindow):
     timer_status: QLabel
 
     # 操作录制 Tab
+    rec_param_group: QWidget
+    rec_exec_group: QWidget
     rec_stage_code: QLineEdit
+    rec_loaded_script_label: QLabel
     rec_loaded_script_path: QLineEdit
     rec_loaded_script_status: QLabel
     btn_rec_load_script: QPushButton
     btn_rec_clear_script: QPushButton
     rec_chk_support_op: QCheckBox
+    rec_takeover_hotkey_label: QLabel
     rec_takeover_hotkey: QLineEdit
     rec_chk_probability_retry: QCheckBox
     btn_rec_probability_config: QPushButton
     combo_rec_debug: CheckedComboBox
+    rec_initial_operator_count_label: QLabel
     rec_initial_operator_count: QSpinBox
+    rec_initial_item_count_label: QLabel
     rec_initial_item_count: QSpinBox
     rec_cost_tag: QComboBox
     rec_op_table: QTableWidget
@@ -228,7 +238,22 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self._recorder_overlay = None
+        # 关闭引导浮层
+        guide_overlay = getattr(self, "_guide_overlay", None)
+        if guide_overlay is not None:
+            try:
+                guide_overlay.close()
+            except Exception:
+                pass
+            self._guide_overlay = None
         event.accept()
+
+    def moveEvent(self, event):
+        """主窗口移动时同步更新引导浮层位置。"""
+        super().moveEvent(event)
+        guide_overlay = getattr(self, "_guide_overlay", None)
+        if guide_overlay is not None and guide_overlay.isVisible():
+            guide_overlay._position_to_main_window()
 
     def _project_root(self) -> str:
         return str(get_project_root())
@@ -245,6 +270,16 @@ class MainWindow(QMainWindow):
                 return json.load(f)
         except Exception:
             return {}
+
+    def _mark_guide_shown(self, version: int):
+        """记录已展示的引导版本号到 config.json。"""
+        config = self._load_config()
+        config["guide_version"] = version
+        try:
+            with open(self._config_path(), "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def _normalize_key_name(self, key: str) -> str:
         """把用户输入的键名规范化成 pydirectinput 能识别的名字。"""
@@ -579,39 +614,53 @@ class MainWindow(QMainWindow):
         return QIcon(target)
 
     def _build_ui(self):
-        tabs = QTabWidget()
-        tabs.setStyleSheet("QTabBar::tab { font-weight: bold; }")
-        self.setCentralWidget(tabs)
+        self._tabs = QTabWidget()
+        self._tabs.setStyleSheet("QTabBar::tab { font-weight: bold; }")
+        self.setCentralWidget(self._tabs)
 
         self.exec_tab = ExecTab(self)
-        tabs.addTab(self.exec_tab, "脚本执行")
-        tabs.setTabIcon(tabs.indexOf(self.exec_tab), self._tab_icon("execute.png"))
+        self._tabs.addTab(self.exec_tab, "脚本执行")
+        self._tabs.setTabIcon(self._tabs.indexOf(self.exec_tab), self._tab_icon("execute.png"))
 
         self.editor_tab = EditorTab(self)
-        tabs.addTab(self.editor_tab, "脚本编辑")
-        tabs.setTabIcon(tabs.indexOf(self.editor_tab), self._tab_icon("edit.png", offset_y=3))
+        self._tabs.addTab(self.editor_tab, "脚本编辑")
+        self._tabs.setTabIcon(self._tabs.indexOf(self.editor_tab), self._tab_icon("edit.png", offset_y=3))
 
         self.resource_tab = ResourceTab(self)
-        tabs.addTab(self.resource_tab, "资源更新")
-        tabs.setTabIcon(tabs.indexOf(self.resource_tab), self._tab_icon("update_file.png"))
+        self._tabs.addTab(self.resource_tab, "资源更新")
+        self._tabs.setTabIcon(self._tabs.indexOf(self.resource_tab), self._tab_icon("update_file.png"))
 
         self.matchstick_tab = MatchstickTab(self)
-        tabs.addTab(self.matchstick_tab, "划火柴")
-        tabs.setTabIcon(tabs.indexOf(self.matchstick_tab), self._tab_icon("match.png"))
+        self._tabs.addTab(self.matchstick_tab, "划火柴")
+        self._tabs.setTabIcon(self._tabs.indexOf(self.matchstick_tab), self._tab_icon("match.png"))
 
         self.timer_tab = TimerTab(self)
-        tabs.addTab(self.timer_tab, "计时器")
-        tabs.setTabIcon(tabs.indexOf(self.timer_tab), self._tab_icon("timer.png", offset_y=3))
+        self._tabs.addTab(self.timer_tab, "计时器")
+        self._tabs.setTabIcon(self._tabs.indexOf(self.timer_tab), self._tab_icon("timer.png", offset_y=3))
 
         self.recorder_tab = RecorderTab(self)
-        tabs.addTab(self.recorder_tab, "操作录制")
-        tabs.setTabIcon(tabs.indexOf(self.recorder_tab), self._tab_icon("record.png"))
+        self._tabs.addTab(self.recorder_tab, "操作录制")
+        self._tabs.setTabIcon(self._tabs.indexOf(self.recorder_tab), self._tab_icon("record.png"))
 
         # 所有 UI 控件创建完成后再加载配置，避免信号处理时访问未创建的控件
         self._apply_config(self._load_config())
 
         # 若启用自动检查，启动后后台静默检查更新
         self.resource_tab.trigger_auto_check()
+
+        # 首次启动引导标志，在 showEvent 中创建浮层
+        self._guide_overlay: GuideOverlay | None = None
+        self._guide_overlay_shown = False
+
+    def showEvent(self, event):
+        """主窗口首次显示时启动引导浮层。"""
+        super().showEvent(event)
+        if not self._guide_overlay_shown:
+            self._guide_overlay_shown = True
+            config = self._load_config()
+            if config.get("guide_version", 0) < GuideOverlay.GUIDE_VERSION:
+                self._guide_overlay = GuideOverlay(self)
+                self._guide_overlay.show()
 
     # 以下方法仍由外部/Tab 通过 main_window 调用，保持公共接口
     def _on_matchstick_enabled_changed(self, state):
