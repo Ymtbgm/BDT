@@ -1,5 +1,4 @@
 <div align="center">
-<img width="376" height="315" alt="Icon" src="https://github.com/user-attachments/assets/c76aa306-e625-44e6-a9d5-04483b68baa7" />
 </div>
 
 ## 📕 目录
