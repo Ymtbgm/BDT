@@ -20,7 +20,7 @@
 </div>
 
 #### **2**.进入游戏编队界面，然后在操作录制界面配置好对应初始干员数量和初始道具数量。
-#### 以下示例中初始干员数量为4(包括助战)，未启用助战，因此不勾选助战。实际进入游戏后有2种初始道具，因此数量为2。
+#### 以下示例中初始干员数量为4(包括助战)，未启用助战，因此不勾选助战。进入游戏后有2种初始道具，因此数量为2。
 <div align="center">
 <img width="640" height="400" alt="2 1" src="https://github.com/user-attachments/assets/10817889-8cf7-4847-a339-a144963c5b32" />
 <img width="609" height="400" alt="2 2" src="https://github.com/user-attachments/assets/45112424-12e7-4743-9939-74c7c071d4a7" />
