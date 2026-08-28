@@ -96,6 +96,20 @@ class OCREngine:
             except Exception:
                 use_gpu = False
 
+        # 关键：在导入 paddle 之前先预加载 torch 和 onnxruntime 的 native DLL。
+        # paddle 自带的 libiomp5md.dll/mkldnn.dll 若先进入进程，会导致 torch 加载
+        # shm.dll 时报 WinError 127，并使 ONNX Runtime 回退到慢路径。
+        try:
+            import torch
+            _ = torch.__version__
+        except Exception:
+            pass
+        try:
+            import onnxruntime as _ort
+            _ = _ort.get_available_providers()
+        except Exception:
+            pass
+
         # 在导入 paddle 前禁用 oneDNN 与新 PIR API，规避 PaddlePaddle 3.x 已知崩溃
         os.environ.setdefault("FLAGS_use_mkldnn", "0")
         os.environ.setdefault("FLAGS_enable_pir_api", "0")

@@ -67,6 +67,17 @@ class QuantityBadgeDetector:
         except Exception as e:
             self._last_error = f"YOLO 初始化失败: {e}"
             log_error(f"[QuantityBadgeDetector] {self._last_error}")
+            try:
+                import traceback
+                from pathlib import Path
+                err_path = Path("debug") / "yolo_init_error.log"
+                err_path.parent.mkdir(parents=True, exist_ok=True)
+                err_path.write_text(
+                    f"{self._last_error}\n\n{traceback.format_exc()}",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             return
 
         # 一次空推理完成 warm-up，避免首次真实检测触发 JIT 编译
