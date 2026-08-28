@@ -104,6 +104,10 @@ tmp_ret = collect_all('torch')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('torchvision')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# ultralytics 会被 YOLO 检测器动态导入，必须完整收集其数据文件和子模块
+#（否则打包后 YOLO 模型加载失败，数量检测会回退到慢得多的 OCR 路径）
+tmp_ret = collect_all('ultralytics')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # PaddleOCR transformers 后端会动态加载 pp_ocrv5 系列自定义模型（含 lazy import 的子模块），
 # 必须把四个变体全部完整收集，否则会出现 ImageProcessor 缺失错误。

@@ -54,6 +54,9 @@ def create_session_options() -> Any:
 
     默认开启图优化、mem pattern，并将日志级别设为 WARNING，避免加载模型时
     输出海量 C 层日志。
+
+    显式设置 intra_op_num_threads，防止 PyInstaller 打包后 OpenMP 无法正确
+    识别核心数而回退到单线程，导致推理速度大幅下降。
     """
     import onnxruntime as ort
 
@@ -61,4 +64,12 @@ def create_session_options() -> Any:
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     sess_options.enable_mem_pattern = True
     sess_options.log_severity_level = 3  # ERROR
+    # 显式指定线程数：打包后若 OpenMP 初始化失败，默认可能为 1
+    try:
+        import os
+        threads = max(1, min(os.cpu_count() or 4, 8))
+        sess_options.intra_op_num_threads = threads
+        sess_options.inter_op_num_threads = 1
+    except Exception:
+        pass
     return sess_options

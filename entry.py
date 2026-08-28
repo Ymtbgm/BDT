@@ -1,4 +1,14 @@
+import os
 import sys
+
+# 在导入任何可能使用 OpenMP/MKL 的库（torch/onnxruntime/paddle）之前设置环境变量，
+# 避免 PyInstaller 打包后因多份 OpenMP 运行时冲突导致推理回退到单线程。
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("KMP_BLOCKTIME", "0")
+try:
+    os.environ.setdefault("OMP_NUM_THREADS", str(max(1, min(os.cpu_count() or 4, 8))))
+except Exception:
+    pass
 
 # 显式导入 gui 包，确保 PyInstaller 能静态分析到 GUI 依赖
 # （entry.py 中的条件导入在 else 分支，PyInstaller 可能追踪不到）
