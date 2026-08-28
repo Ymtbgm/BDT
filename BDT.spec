@@ -61,6 +61,9 @@ hiddenimports += [
     'core.update', 'core.update.levels_updater',
     'models', 'models.script_schema', 'models.raw_recording',
     'action',
+    # matplotlib 被 ultralytics 硬引用，打包时必须包含，否则 YOLO 会初始化失败并回退到慢路径
+    'matplotlib', 'matplotlib.pyplot', 'matplotlib.backends', 'matplotlib.backends.backend_agg',
+    'matplotlib.figure', 'matplotlib.colors', 'matplotlib.patches', 'matplotlib.path',
 ]
 
 # Cython 的数据文件（如 Utility/CppSupport.cpp）在异常 traceback 渲染时会被读取，
@@ -155,7 +158,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['scipy', 'matplotlib', 'skimage', 'sklearn', 'PyQt5'],
+    excludes=['scipy', 'skimage', 'sklearn', 'PyQt5'],
     noarchive=False,
     optimize=0,
 )
